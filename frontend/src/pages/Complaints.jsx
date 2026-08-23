@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const Complaints = () => {
-  const { authFetch } = useAuth();
+  const { user, authFetch } = useAuth();
   
   // Data States
   const [complaints, setComplaints] = useState([]);
@@ -11,10 +11,16 @@ const Complaints = () => {
   const [priorities, setPriorities] = useState([]);
   const [statuses, setStatuses] = useState([]);
   
-  // Filter States
+  // Filter & Search States
   const [filterStatus, setFilterStatus] = useState('');
   const [filterPriority, setFilterPriority] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
+  const [search, setSearch] = useState('');
+  
+  // Pagination States
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
+  const limit = 10;
   
   // Modal & Form States
   const [showModal, setShowModal] = useState(false);
@@ -51,31 +57,74 @@ const Complaints = () => {
     }
   };
 
-  const fetchComplaints = async () => {
+  const fetchComplaints = async (currentOffset = offset) => {
     try {
       const params = [];
       if (filterStatus) params.push(`status=${filterStatus}`);
       if (filterPriority) params.push(`priority=${filterPriority}`);
       if (filterCategory) params.push(`category=${filterCategory}`);
+      if (search.trim()) params.push(`search=${encodeURIComponent(search.trim())}`);
+      params.push(`limit=${limit}`);
+      params.push(`offset=${currentOffset}`);
       
       const queryString = params.length > 0 ? `?${params.join('&')}` : '';
       const res = await authFetch(`/complaints${queryString}`);
       const result = await res.json();
       if (result.success) {
         setComplaints(result.data);
+        setTotal(result.pagination.total);
       }
     } catch (err) {
       setError('Failed to reload complaints list.');
     }
   };
 
+  const handleExportCSV = async () => {
+    setError('');
+    try {
+      const res = await authFetch('/complaints/export');
+      if (!res.ok) {
+        throw new Error('Failed to export CSV logs');
+      }
+      const blob = await res.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', `complaints_export_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setError(err.message || 'Error occurred exporting complaints logs.');
+    }
+  };
+
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    setOffset(0);
+    fetchComplaints(0);
+  };
+
+  const handlePageChange = (direction) => {
+    let nextOffset = offset;
+    if (direction === 'next') {
+      nextOffset = offset + limit;
+    } else if (direction === 'prev') {
+      nextOffset = Math.max(0, offset - limit);
+    }
+    setOffset(nextOffset);
+    fetchComplaints(nextOffset);
+  };
+
   useEffect(() => {
     fetchData();
   }, []);
 
-  // Reload complaints whenever a filter changes
+  // Reload complaints and reset offset whenever a filter changes
   useEffect(() => {
-    fetchComplaints();
+    setOffset(0);
+    fetchComplaints(0);
   }, [filterStatus, filterPriority, filterCategory]);
 
   const handleCreateComplaint = async (e) => {
@@ -126,55 +175,82 @@ const Complaints = () => {
 
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <h1>Complaint Tickets Ledger</h1>
-        <button className="btn btn-primary" onClick={() => setShowModal(true)}>
-          File New Complaint
-        </button>
+        <div style={{ display: 'flex', gap: '0.75rem' }}>
+          {user && user.role === 'ADMIN' && (
+            <button className="btn btn-secondary" onClick={handleExportCSV}>
+              Export CSV
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+            File New Complaint
+          </button>
+        </div>
       </div>
 
       {error && <div className="alert alert-danger">{error}</div>}
 
       {/* Filters Bar */}
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '180px' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Status State</span>
-            <select
-              className="form-input"
-              style={{ padding: '0.4rem 0.8rem' }}
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-            >
-              <option value="">All Statuses</option>
-              {statuses.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-            </select>
-          </div>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          {/* Search Box */}
+          <form onSubmit={handleSearchSubmit} style={{ display: 'flex', alignItems: 'flex-end', gap: '0.5rem', flexGrow: '1', minWidth: '280px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flexGrow: '1' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Search Keywords</span>
+              <input
+                type="text"
+                className="form-input"
+                style={{ padding: '0.4rem 0.8rem' }}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search ticket title or description..."
+              />
+            </div>
+            <button type="submit" className="btn btn-secondary" style={{ padding: '0.45rem 1rem' }}>
+              Search
+            </button>
+          </form>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '180px' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Priority Severity</span>
-            <select
-              className="form-input"
-              style={{ padding: '0.4rem 0.8rem' }}
-              value={filterPriority}
-              onChange={(e) => setFilterPriority(e.target.value)}
-            >
-              <option value="">All Priorities</option>
-              {priorities.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
-            </select>
-          </div>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Status State</span>
+              <select
+                className="form-input"
+                style={{ padding: '0.4rem 0.8rem' }}
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+              >
+                <option value="">All Statuses</option>
+                {statuses.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+            </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '180px' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Category Group</span>
-            <select
-              className="form-input"
-              style={{ padding: '0.4rem 0.8rem' }}
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-            >
-              <option value="">All Categories</option>
-              {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-            </select>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Priority Severity</span>
+              <select
+                className="form-input"
+                style={{ padding: '0.4rem 0.8rem' }}
+                value={filterPriority}
+                onChange={(e) => setFilterPriority(e.target.value)}
+              >
+                <option value="">All Priorities</option>
+                {priorities.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Category Group</span>
+              <select
+                className="form-input"
+                style={{ padding: '0.4rem 0.8rem' }}
+                value={filterCategory}
+                onChange={(e) => setFilterCategory(e.target.value)}
+              >
+                <option value="">All Categories</option>
+                {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -227,6 +303,31 @@ const Complaints = () => {
             </table>
           </div>
         )}
+
+        {/* Pagination controls */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderTop: '1px solid var(--border-color)', marginTop: '0' }}>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            Showing {complaints.length > 0 ? offset + 1 : 0} - {Math.min(offset + complaints.length, total)} of {total} tickets
+          </span>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem' }}
+              disabled={offset === 0}
+              onClick={() => handlePageChange('prev')}
+            >
+              &larr; Previous
+            </button>
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem' }}
+              disabled={offset + limit >= total}
+              onClick={() => handlePageChange('next')}
+            >
+              Next &rarr;
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* File New Complaint Modal Overlay */}

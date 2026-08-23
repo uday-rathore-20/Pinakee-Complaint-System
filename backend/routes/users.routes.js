@@ -6,8 +6,16 @@ const {
   createUser,
   updateUser,
   updateUserStatus,
+  updateUserProfile,
+  changeUserPassword,
 } = require('../controllers/users.controller');
 const { authenticateJWT, requireRole } = require('../middleware/auth');
+
+// PUT /api/users/profile -> Update logged-in user profile details (requires authentication)
+router.put('/profile', authenticateJWT, updateUserProfile);
+
+// PUT /api/users/profile/password -> Update logged-in user password securely (requires authentication)
+router.put('/profile/password', authenticateJWT, changeUserPassword);
 
 // GET /api/users -> List all users (requires authentication)
 router.get('/', authenticateJWT, getUsers);

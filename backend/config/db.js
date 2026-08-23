@@ -10,8 +10,10 @@ if (!connectionString) {
 } else {
   pool = new Pool({
     connectionString,
-    // Support SSL configuration for secure remote databases if needed in production
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    // Support SSL configuration for secure remote databases if needed in production, but respect disable flags
+    ssl: (process.env.NODE_ENV === 'production' && process.env.PGSSLMODE !== 'disable')
+      ? { rejectUnauthorized: false }
+      : false
   });
 
   pool.on('error', (err) => {

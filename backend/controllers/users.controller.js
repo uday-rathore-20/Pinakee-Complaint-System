@@ -382,10 +382,107 @@ const updateUserStatus = async (req, res) => {
   }
 };
 
+const updateUserProfile = async (req, res) => {
+  const userId = req.user.id;
+  const { first_name, last_name } = req.body;
+
+  if (!first_name || !last_name) {
+    return res.status(400).json({ success: false, message: 'First name and last name are required' });
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    const query = `
+      UPDATE users 
+      SET first_name = $1, last_name = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      RETURNING id
+    `;
+    const result = await dbPool.query(query, [first_name.trim(), last_name.trim(), userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Fetch the complete profile details with text names for role/department
+    const fetchQuery = `
+      SELECT u.id, u.first_name, u.last_name, u.email, u.is_active, 
+             r.name AS role, d.name AS department, u.created_at, u.updated_at
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+      LEFT JOIN departments d ON u.department_id = d.id
+      WHERE u.id = $1
+    `;
+    const fetchResult = await dbPool.query(fetchQuery, [userId]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      data: fetchResult.rows[0]
+    });
+  } catch (error) {
+    console.error('Update user profile error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to update user profile' });
+  }
+};
+
+const changeUserPassword = async (req, res) => {
+  const userId = req.user.id;
+  const { current_password, new_password } = req.body;
+
+  if (!current_password || !new_password) {
+    return res.status(400).json({ success: false, message: 'Current password and new password are required' });
+  }
+
+  if (new_password.trim().length < 6) {
+    return res.status(400).json({ success: false, message: 'New password must be at least 6 characters long' });
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    // Retrieve the user's password hash
+    const userResult = await dbPool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const { password_hash } = userResult.rows[0];
+
+    // Verify current password matches stored hash
+    const isMatch = await bcrypt.compare(current_password, password_hash);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, message: 'Incorrect current password' });
+    }
+
+    // Hash the new password
+    const salt = await bcrypt.genSalt(10);
+    const newPasswordHash = await bcrypt.hash(new_password, salt);
+
+    // Save the new password hash
+    await dbPool.query('UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [newPasswordHash, userId]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    console.error('Change user password error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to change password' });
+  }
+};
+
 module.exports = {
   getUsers,
   getUserById,
   createUser,
   updateUser,
   updateUserStatus,
+  updateUserProfile,
+  changeUserPassword,
 };

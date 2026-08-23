@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Complaints from './pages/Complaints';
 import ComplaintDetail from './pages/ComplaintDetail';
 import Users from './pages/Users';
+import Profile from './pages/Profile';
 
 // Sidebar Navigation Shell for Authenticated users
 const AppLayout = ({ children }) => {
@@ -50,6 +51,13 @@ const AppLayout = ({ children }) => {
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
             </svg>
             Complaints
+          </Link>
+
+          <Link to="/profile" className={`sidebar-link ${isLinkActive('/profile') ? 'active' : ''}`}>
+            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+            </svg>
+            My Profile
           </Link>
 
           {user.role === 'ADMIN' && (
@@ -161,6 +169,12 @@ function App() {
           <Route path="/complaints/:id" element={
             <ProtectedRoute>
               <ComplaintDetail />
+            </ProtectedRoute>
+          } />
+
+          <Route path="/profile" element={
+            <ProtectedRoute>
+              <Profile />
             </ProtectedRoute>
           } />
 

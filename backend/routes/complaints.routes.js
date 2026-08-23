@@ -8,10 +8,12 @@ const {
   assignComplaint,
   updateComplaintStatus,
   addComment,
+  exportComplaints,
 } = require('../controllers/complaints.controller');
 const { authenticateJWT } = require('../middleware/auth');
 
 // Mount routes (prefix /api/complaints is registered in server.js)
+router.get('/export', authenticateJWT, exportComplaints);
 router.get('/', authenticateJWT, getComplaints);
 router.get('/:id', authenticateJWT, getComplaintById);
 router.post('/', authenticateJWT, createComplaint);

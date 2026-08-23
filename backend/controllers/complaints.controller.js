@@ -39,7 +39,7 @@ const verifyComplaintAccess = (user, complaint) => {
  * GET /api/complaints
  */
 const getComplaints = async (req, res) => {
-  const { status, priority, category, department } = req.query;
+  const { status, priority, category, department, search, limit, offset } = req.query;
   const user = req.user;
 
   try {
@@ -47,12 +47,19 @@ const getComplaints = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
     }
 
+    // Parse pagination parameters
+    const parsedLimit = parseInt(limit, 10);
+    const parsedOffset = parseInt(offset, 10);
+    const finalLimit = isNaN(parsedLimit) || parsedLimit < 1 ? 10 : parsedLimit;
+    const finalOffset = isNaN(parsedOffset) || parsedOffset < 0 ? 0 : parsedOffset;
+
     let query = `
       SELECT c.id, c.ticket_number, c.title, c.description, c.created_at, c.updated_at,
              u_creator.id AS creator_id, u_creator.first_name AS creator_first_name, u_creator.last_name AS creator_last_name, u_creator.email AS creator_email,
              cc.name AS category, cs.name AS status, cp.name AS priority,
              dept.name AS department, dept.id AS department_id,
-             u_assignee.id AS assignee_id, u_assignee.first_name AS assignee_first_name, u_assignee.last_name AS assignee_last_name
+             u_assignee.id AS assignee_id, u_assignee.first_name AS assignee_first_name, u_assignee.last_name AS assignee_last_name,
+             COUNT(*) OVER() AS total_count
       FROM complaints c
       JOIN users u_creator ON c.created_by_id = u_creator.id
       JOIN complaint_categories cc ON c.category_id = cc.id
@@ -68,7 +75,12 @@ const getComplaints = async (req, res) => {
     // 1. Enforce role-based boundaries
     if (user.role === 'DEPT_HEAD') {
       if (!user.department_id) {
-        return res.status(200).json({ success: true, count: 0, data: [] });
+        return res.status(200).json({
+          success: true,
+          pagination: { total: 0, limit: finalLimit, offset: finalOffset },
+          count: 0,
+          data: []
+        });
       }
       queryParams.push(user.department_id);
       whereClauses.push(`c.department_id = $${queryParams.length}`);
@@ -86,16 +98,19 @@ const getComplaints = async (req, res) => {
       whereClauses.push(`LOWER(cs.name) = LOWER($${queryParams.length})`);
     }
 
+    // Map priority filter
     if (priority) {
       queryParams.push(priority.trim());
       whereClauses.push(`LOWER(cp.name) = LOWER($${queryParams.length})`);
     }
 
+    // Map category filter
     if (category) {
       queryParams.push(category.trim());
       whereClauses.push(`LOWER(cc.name) = LOWER($${queryParams.length})`);
     }
 
+    // Map department filter
     if (department) {
       queryParams.push(department.trim());
       if (isNaN(department)) {
@@ -105,18 +120,43 @@ const getComplaints = async (req, res) => {
       }
     }
 
+    // 3. Keyword search (on title & description)
+    if (search && search.trim() !== '') {
+      queryParams.push(`%${search.trim()}%`);
+      whereClauses.push(`(c.title ILIKE $${queryParams.length} OR c.description ILIKE $${queryParams.length})`);
+    }
+
     if (whereClauses.length > 0) {
       query += ` WHERE ${whereClauses.join(' AND ')}`;
     }
 
-    query += ` ORDER BY c.created_at DESC`;
+    // Add pagination LIMIT and OFFSET to query
+    queryParams.push(finalLimit);
+    const limitPlaceholder = `$${queryParams.length}`;
+    queryParams.push(finalOffset);
+    const offsetPlaceholder = `$${queryParams.length}`;
+
+    query += ` ORDER BY c.created_at DESC LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`;
 
     const result = await dbPool.query(query, queryParams);
 
+    const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
+
+    // Remove total_count column from output rows to keep schema clean
+    const cleanedRows = result.rows.map(row => {
+      const { total_count, ...cleaned } = row;
+      return cleaned;
+    });
+
     return res.status(200).json({
       success: true,
-      count: result.rows.length,
-      data: result.rows
+      pagination: {
+        total: totalCount,
+        limit: finalLimit,
+        offset: finalOffset
+      },
+      count: cleanedRows.length,
+      data: cleanedRows
     });
   } catch (error) {
     console.error('Get complaints error:', error.message);
@@ -408,8 +448,13 @@ const assignComplaint = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
     }
 
-    // Retrieve complaint
-    const compCheck = await dbPool.query('SELECT * FROM complaints WHERE id = $1', [id]);
+    // Retrieve complaint joining priority details
+    const compCheck = await dbPool.query(`
+      SELECT c.*, cp.name AS priority 
+      FROM complaints c
+      LEFT JOIN complaint_priorities cp ON c.priority_id = cp.id
+      WHERE c.id = $1
+    `, [id]);
     if (compCheck.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Complaint not found' });
     }
@@ -493,6 +538,20 @@ const assignComplaint = async (req, res) => {
       INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
       VALUES ($1, $2, $3, $4, $5)
     `, [id, user.id, complaint.status_id, targetStatusId, auditRemark]);
+
+    // Send email notification to assignee if assignee has been changed or set
+    if (finalAssigneeId && finalAssigneeId !== complaint.assigned_to_id) {
+      const assigneeResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [finalAssigneeId]);
+      if (assigneeResult.rows.length > 0) {
+        const assigneeUser = assigneeResult.rows[0];
+        const notifications = require('../utils/notifications');
+        notifications.sendAssignmentNotification({
+          ticket_number: result.rows[0].ticket_number,
+          title: result.rows[0].title,
+          priority: complaint.priority
+        }, assigneeUser).catch(err => console.error('Failed to dispatch assignment email:', err));
+      }
+    }
 
     return res.status(200).json({
       success: true,
@@ -580,6 +639,19 @@ const updateComplaintStatus = async (req, res) => {
       VALUES ($1, $2, $3, $4, $5)
     `, [id, user.id, complaint.status_id, status_id, remarks ? remarks.trim() : defaultRemarks]);
 
+    // Send resolution notification to creator if new status is Resolved
+    if (targetStatus.name === 'Resolved') {
+      const creatorResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.created_by_id]);
+      if (creatorResult.rows.length > 0) {
+        const creatorUser = creatorResult.rows[0];
+        const notifications = require('../utils/notifications');
+        notifications.sendResolutionNotification({
+          ticket_number: updateResult.rows[0].ticket_number,
+          title: updateResult.rows[0].title
+        }, creatorUser).catch(err => console.error('Failed to dispatch resolution email:', err));
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: `Complaint status updated to '${targetStatus.name}'`,
@@ -635,6 +707,39 @@ const addComment = async (req, res) => {
       RETURNING *
     `, [id, user.id, comment_text.trim(), targetIsInternal]);
 
+    // Send comment notification
+    if (user.id === complaint.created_by_id) {
+      // Customer commented: notify assigned agent (if assigned)
+      if (complaint.assigned_to_id) {
+        const assigneeResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.assigned_to_id]);
+        if (assigneeResult.rows.length > 0) {
+          const assigneeUser = assigneeResult.rows[0];
+          const notifications = require('../utils/notifications');
+          notifications.sendCommentNotification({
+            ticket_number: complaint.ticket_number,
+            title: complaint.title
+          }, {
+            author_name: `${user.first_name} ${user.last_name}`,
+            comment_text: comment_text.trim()
+          }, assigneeUser).catch(err => console.error('Failed to notify assignee agent:', err));
+        }
+      }
+    } else if (!targetIsInternal) {
+      // Agent/Staff/Admin posted a public comment: notify customer/creator
+      const creatorResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.created_by_id]);
+      if (creatorResult.rows.length > 0) {
+        const creatorUser = creatorResult.rows[0];
+        const notifications = require('../utils/notifications');
+        notifications.sendCommentNotification({
+          ticket_number: complaint.ticket_number,
+          title: complaint.title
+        }, {
+          author_name: `${user.first_name} ${user.last_name}`,
+          comment_text: comment_text.trim()
+        }, creatorUser).catch(err => console.error('Failed to notify ticket customer:', err));
+      }
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Comment added successfully',
@@ -646,6 +751,80 @@ const addComment = async (req, res) => {
   }
 };
 
+const exportComplaints = async (req, res) => {
+  const user = req.user;
+
+  // Double check ADMIN role authorization
+  if (user.role !== 'ADMIN') {
+    return res.status(403).json({ success: false, message: 'Forbidden: Admin access only' });
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    const query = `
+      SELECT c.ticket_number, c.title, c.description, c.created_at,
+             u_creator.first_name AS creator_first_name, u_creator.last_name AS creator_last_name,
+             cc.name AS category, cs.name AS status, cp.name AS priority,
+             dept.name AS department,
+             u_assignee.first_name AS assignee_first_name, u_assignee.last_name AS assignee_last_name
+      FROM complaints c
+      JOIN users u_creator ON c.created_by_id = u_creator.id
+      JOIN complaint_categories cc ON c.category_id = cc.id
+      JOIN complaint_statuses cs ON c.status_id = cs.id
+      JOIN complaint_priorities cp ON c.priority_id = cp.id
+      LEFT JOIN departments dept ON c.department_id = dept.id
+      LEFT JOIN users u_assignee ON c.assigned_to_id = u_assignee.id
+      ORDER BY c.created_at DESC
+    `;
+
+    const result = await dbPool.query(query);
+
+    // Format helper to escape CSV values containing commas or quotes
+    const escapeCSV = (val) => {
+      if (val === null || val === undefined) return '';
+      const stringVal = String(val);
+      if (stringVal.includes(',') || stringVal.includes('"') || stringVal.includes('\n') || stringVal.includes('\r')) {
+        return `"${stringVal.replace(/"/g, '""')}"`;
+      }
+      return stringVal;
+    };
+
+    const headers = ['Ticket Number', 'Title', 'Description', 'Creator', 'Category', 'Priority', 'Status', 'Department', 'Assigned Agent', 'Date Created'];
+    const csvRows = [headers.join(',')];
+
+    for (const row of result.rows) {
+      const creatorName = `${row.creator_first_name} ${row.creator_last_name}`;
+      const assigneeName = row.assignee_first_name ? `${row.assignee_first_name} ${row.assignee_last_name}` : 'Unassigned';
+      
+      const csvRow = [
+        escapeCSV(row.ticket_number),
+        escapeCSV(row.title),
+        escapeCSV(row.description),
+        escapeCSV(creatorName),
+        escapeCSV(row.category),
+        escapeCSV(row.priority),
+        escapeCSV(row.status),
+        escapeCSV(row.department || 'General'),
+        escapeCSV(assigneeName),
+        escapeCSV(new Date(row.created_at).toISOString())
+      ];
+      csvRows.push(csvRow.join(','));
+    }
+
+    const csvContent = csvRows.join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="complaints_export_${Date.now()}.csv"`);
+    return res.status(200).send(csvContent);
+  } catch (error) {
+    console.error('Export complaints error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to export complaints logs' });
+  }
+};
+
 module.exports = {
   getComplaints,
   getComplaintById,
@@ -654,4 +833,5 @@ module.exports = {
   assignComplaint,
   updateComplaintStatus,
   addComment,
+  exportComplaints,
 };

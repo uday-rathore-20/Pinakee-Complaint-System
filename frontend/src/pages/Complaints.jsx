@@ -1,0 +1,317 @@
+import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+
+const Complaints = () => {
+  const { authFetch } = useAuth();
+  
+  // Data States
+  const [complaints, setComplaints] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [priorities, setPriorities] = useState([]);
+  const [statuses, setStatuses] = useState([]);
+  
+  // Filter States
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterPriority, setFilterPriority] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  
+  // Modal & Form States
+  const [showModal, setShowModal] = useState(false);
+  const [formTitle, setFormTitle] = useState('');
+  const [formDesc, setFormDesc] = useState('');
+  const [formCat, setFormCat] = useState('');
+  const [formPri, setFormPri] = useState('');
+  
+  const [loading, setLoading] = useState(true);
+  const [formSubmitting, setFormSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [formError, setFormError] = useState('');
+
+  // Fetch lookups and complaints
+  const fetchData = async () => {
+    try {
+      const catRes = await authFetch('/categories');
+      const priRes = await authFetch('/priorities');
+      const statusRes = await authFetch('/statuses');
+      
+      const categoriesResult = await catRes.json();
+      const prioritiesResult = await priRes.json();
+      const statusesResult = await statusRes.json();
+
+      if (categoriesResult.success) setCategories(categoriesResult.data);
+      if (prioritiesResult.success) setPriorities(prioritiesResult.data);
+      if (statusesResult.success) setStatuses(statusesResult.data);
+
+      await fetchComplaints();
+    } catch (err) {
+      setError('Failed to fetch lookup collections.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchComplaints = async () => {
+    try {
+      const params = [];
+      if (filterStatus) params.push(`status=${filterStatus}`);
+      if (filterPriority) params.push(`priority=${filterPriority}`);
+      if (filterCategory) params.push(`category=${filterCategory}`);
+      
+      const queryString = params.length > 0 ? `?${params.join('&')}` : '';
+      const res = await authFetch(`/complaints${queryString}`);
+      const result = await res.json();
+      if (result.success) {
+        setComplaints(result.data);
+      }
+    } catch (err) {
+      setError('Failed to reload complaints list.');
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  // Reload complaints whenever a filter changes
+  useEffect(() => {
+    fetchComplaints();
+  }, [filterStatus, filterPriority, filterCategory]);
+
+  const handleCreateComplaint = async (e) => {
+    e.preventDefault();
+    setFormError('');
+    setFormSubmitting(true);
+
+    if (!formTitle || !formDesc || !formCat || !formPri) {
+      setFormError('All fields are required.');
+      setFormSubmitting(false);
+      return;
+    }
+
+    try {
+      const res = await authFetch('/complaints', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: formTitle,
+          description: formDesc,
+          category_id: parseInt(formCat),
+          priority_id: parseInt(formPri)
+        })
+      });
+      const result = await res.json();
+      
+      if (res.ok && result.success) {
+        // Reset form and close modal
+        setFormTitle('');
+        setFormDesc('');
+        setFormCat('');
+        setFormPri('');
+        setShowModal(false);
+        // Refresh list
+        fetchComplaints();
+      } else {
+        setFormError(result.message || 'Submission failed');
+      }
+    } catch (err) {
+      setFormError('Failed to connect to the server');
+    } finally {
+      setFormSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="page-container"><h2>Loading complaints...</h2></div>;
+  }
+
+  return (
+    <div className="page-container">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+        <h1>Complaint Tickets Ledger</h1>
+        <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+          File New Complaint
+        </button>
+      </div>
+
+      {error && <div className="alert alert-danger">{error}</div>}
+
+      {/* Filters Bar */}
+      <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '180px' }}>
+            <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Status State</span>
+            <select
+              className="form-input"
+              style={{ padding: '0.4rem 0.8rem' }}
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+            >
+              <option value="">All Statuses</option>
+              {statuses.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '180px' }}>
+            <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Priority Severity</span>
+            <select
+              className="form-input"
+              style={{ padding: '0.4rem 0.8rem' }}
+              value={filterPriority}
+              onChange={(e) => setFilterPriority(e.target.value)}
+            >
+              <option value="">All Priorities</option>
+              {priorities.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '180px' }}>
+            <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Category Group</span>
+            <select
+              className="form-input"
+              style={{ padding: '0.4rem 0.8rem' }}
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+            >
+              <option value="">All Categories</option>
+              {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Complaints Table */}
+      <div className="card" style={{ padding: '0' }}>
+        {complaints.length === 0 ? (
+          <p style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>No complaints found matching the criteria.</p>
+        ) : (
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Ticket</th>
+                  <th>Title</th>
+                  <th>Creator</th>
+                  <th>Category</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                  <th>Date Filed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {complaints.map(ticket => {
+                  const dateStr = new Date(ticket.created_at).toLocaleDateString();
+                  const statusKey = ticket.status.toLowerCase().replace(/ /g, '-');
+                  const priorityKey = ticket.priority.toLowerCase();
+                  
+                  return (
+                    <tr key={ticket.id}>
+                      <td>
+                        <Link to={`/complaints/${ticket.id}`} style={{ color: 'var(--primary-light)', fontWeight: 'bold', textDecoration: 'none' }}>
+                          {ticket.ticket_number}
+                        </Link>
+                      </td>
+                      <td><strong>{ticket.title}</strong></td>
+                      <td>{ticket.creator_first_name} {ticket.creator_last_name}</td>
+                      <td>{ticket.category}</td>
+                      <td>
+                        <span className={`badge badge-${priorityKey}`}>{ticket.priority}</span>
+                      </td>
+                      <td>
+                        <span className={`badge badge-${statusKey}`}>{ticket.status}</span>
+                      </td>
+                      <td>{dateStr}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* File New Complaint Modal Overlay */}
+      {showModal && (
+        <div className="modal-overlay">
+          <div className="modal-card">
+            <div className="modal-header">
+              <h2>File a New Complaint</h2>
+              <button
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onClick={() => setShowModal(false)}
+              >
+                &times;
+              </button>
+            </div>
+            
+            {formError && <div className="alert alert-danger">{formError}</div>}
+            
+            <form onSubmit={handleCreateComplaint}>
+              <div className="form-group">
+                <label className="form-label">Subject Title</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={formTitle}
+                  onChange={(e) => setFormTitle(e.target.value)}
+                  placeholder="Summarize the complaint issue"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Detailed Description</label>
+                <textarea
+                  className="form-input"
+                  style={{ minHeight: '120px', resize: 'vertical' }}
+                  value={formDesc}
+                  onChange={(e) => setFormDesc(e.target.value)}
+                  placeholder="Describe the complaint with detail..."
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div className="form-group" style={{ margin: '0' }}>
+                  <label className="form-label">Category Group</label>
+                  <select
+                    className="form-input"
+                    value={formCat}
+                    onChange={(e) => setFormCat(e.target.value)}
+                    required
+                  >
+                    <option value="">Select Category</option>
+                    {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ margin: '0' }}>
+                  <label className="form-label">Priority Severity</label>
+                  <select
+                    className="form-input"
+                    value={formPri}
+                    onChange={(e) => setFormPri(e.target.value)}
+                    required
+                  >
+                    <option value="">Select Priority</option>
+                    {priorities.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={formSubmitting}>
+                  {formSubmitting ? 'Submitting...' : 'Submit Complaint'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Complaints;

@@ -10,12 +10,30 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+// Routes
+const authRoutes = require('./routes/auth.routes');
+const usersRoutes = require('./routes/users.routes');
+const lookupsRoutes = require('./routes/lookups.routes');
+const complaintsRoutes = require('./routes/complaints.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
+
+app.use('/api/auth', authRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api', lookupsRoutes);
+app.use('/api/complaints', complaintsRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+
 // Root route (friendly greeting)
 app.get('/', (req, res) => {
   res.json({
     message: 'Welcome to the PINakee Complaint Management System API',
     endpoints: {
-      healthCheck: '/api/health'
+      healthCheck: '/api/health',
+      auth: '/api/auth',
+      users: '/api/users',
+      lookups: '/api/{categories|departments|statuses|priorities}',
+      complaints: '/api/complaints',
+      dashboard: '/api/dashboard/{stats|activity}'
     }
   });
 });

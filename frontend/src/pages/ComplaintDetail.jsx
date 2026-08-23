@@ -10,6 +10,9 @@ const ComplaintDetail = () => {
   const [complaint, setComplaint] = useState(null);
   const [comments, setComments] = useState([]);
   const [history, setHistory] = useState([]);
+  const [attachments, setAttachments] = useState([]);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
   
   // Lookup collections for controls
   const [statuses, setStatuses] = useState([]);
@@ -79,14 +82,81 @@ const ComplaintDetail = () => {
     }
   };
 
+  const fetchAttachments = async () => {
+    try {
+      const res = await authFetch(`/complaints/${id}/attachments`);
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setAttachments(result.data);
+      }
+    } catch (err) {
+      console.error('Failed to load attachments:', err);
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
       await fetchComplaintDetails();
       await fetchLookups();
+      await fetchAttachments();
       setLoading(false);
     };
     init();
   }, [id]);
+
+  const handleUploadFile = async (e) => {
+    e.preventDefault();
+    if (!selectedFile) return;
+    setUploading(true);
+    setActionError('');
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const res = await authFetch(`/complaints/${id}/attachments`, {
+        method: 'POST',
+        body: formData
+      });
+      const result = await res.json();
+
+      if (res.ok && result.success) {
+        setSelectedFile(null);
+        document.getElementById('file-upload-input').value = '';
+        await fetchAttachments();
+        await fetchComplaintDetails(); // Refresh comments list
+      } else {
+        setActionError(result.message || 'File upload failed');
+      }
+    } catch (err) {
+      setActionError('Network error uploading file.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDownloadAttachment = async (attachId, fileName) => {
+    setActionError('');
+    try {
+      const res = await authFetch(`/attachments/${attachId}`);
+      if (!res.ok) {
+        const result = await res.json().catch(() => ({}));
+        throw new Error(result.message || 'Failed to download file');
+      }
+
+      const blob = await res.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setActionError(err.message || 'Error occurred during file download.');
+    }
+  };
 
   const handleAddComment = async (e) => {
     e.preventDefault();
@@ -227,6 +297,58 @@ const ComplaintDetail = () => {
             <p style={{ whiteSpace: 'pre-wrap', color: 'var(--text-color)', fontSize: '0.975rem' }}>
               {complaint.description}
             </p>
+          </div>
+
+          {/* Attachments Card */}
+          <div className="card">
+            <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
+              File Attachments ({attachments.length})
+            </h3>
+
+            {attachments.length === 0 ? (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>No attachments uploaded yet.</p>
+            ) : (
+              <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                {attachments.map(att => (
+                  <li key={att.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', padding: '0.75rem 1rem', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
+                    <div style={{ wordBreak: 'break-all', paddingRight: '1rem' }}>
+                      <strong style={{ color: 'var(--secondary-color)' }}>{att.file_name}</strong>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                        {(att.file_size / 1024).toFixed(1)} KB | Uploaded by {att.first_name} {att.last_name} ({att.role})
+                      </div>
+                    </div>
+                    <button 
+                      className="btn btn-secondary" 
+                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                      onClick={() => handleDownloadAttachment(att.id, att.file_name)}
+                    >
+                      Download
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {complaint.status !== 'Closed' && (
+              <form onSubmit={handleUploadFile} style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                <div className="form-group" style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0' }}>
+                  <input
+                    type="file"
+                    id="file-upload-input"
+                    className="form-input"
+                    style={{ padding: '0.4rem 0.8rem', flexGrow: '1' }}
+                    onChange={(e) => setSelectedFile(e.target.files[0])}
+                    required
+                  />
+                  <button type="submit" className="btn btn-primary" disabled={uploading || !selectedFile} style={{ whiteSpace: 'nowrap' }}>
+                    {uploading ? 'Uploading...' : 'Upload File'}
+                  </button>
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                  Supported formats: image, PDF, text, document (Max 5MB)
+                </div>
+              </form>
+            )}
           </div>
 
           {/* Comments Feed Section */}

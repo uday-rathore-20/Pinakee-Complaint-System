@@ -16,12 +16,14 @@ const usersRoutes = require('./routes/users.routes');
 const lookupsRoutes = require('./routes/lookups.routes');
 const complaintsRoutes = require('./routes/complaints.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
+const attachmentsRoutes = require('./routes/attachments.routes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api', lookupsRoutes);
 app.use('/api/complaints', complaintsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api', attachmentsRoutes);
 
 // Root route (friendly greeting)
 app.get('/', (req, res) => {
@@ -33,7 +35,8 @@ app.get('/', (req, res) => {
       users: '/api/users',
       lookups: '/api/{categories|departments|statuses|priorities}',
       complaints: '/api/complaints',
-      dashboard: '/api/dashboard/{stats|activity}'
+      dashboard: '/api/dashboard/{stats|activity}',
+      attachments: '/api/{complaints/:id/attachments|attachments/:id}'
     }
   });
 });

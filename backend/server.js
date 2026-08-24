@@ -70,21 +70,23 @@ app.use('/api/complaints', complaintsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api', attachmentsRoutes);
 
-// Root route (friendly greeting)
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Welcome to the PINakee Complaint Management System API',
-    endpoints: {
-      healthCheck: '/api/health',
-      auth: '/api/auth',
-      users: '/api/users',
-      lookups: '/api/{categories|departments|statuses|priorities}',
-      complaints: '/api/complaints',
-      dashboard: '/api/dashboard/{stats|activity}',
-      attachments: '/api/{complaints/:id/attachments|attachments/:id}'
-    }
+// Root route (friendly greeting) - Dev only
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/', (req, res) => {
+    res.json({
+      message: 'Welcome to the PINakee Complaint Management System API',
+      endpoints: {
+        healthCheck: '/api/health',
+        auth: '/api/auth',
+        users: '/api/users',
+        lookups: '/api/{categories|departments|statuses|priorities}',
+        complaints: '/api/complaints',
+        dashboard: '/api/dashboard/{stats|activity}',
+        attachments: '/api/{complaints/:id/attachments|attachments/:id}'
+      }
+    });
   });
-});
+}
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
@@ -109,6 +111,26 @@ app.get('/api/health', async (req, res) => {
     database: dbStatus,
     environment: process.env.NODE_ENV || 'development'
   });
+});
+
+// Serve static assets in production mode
+if (process.env.NODE_ENV === 'production') {
+  const path = require('path');
+  const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
+  app.use(express.static(frontendDistPath));
+  
+  // SPA routing fallback: route non-API requests to index.html
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) {
+      return next();
+    }
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+  });
+}
+
+// Fallback for unmapped API endpoints (returns structured JSON 404)
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ success: false, message: 'API endpoint not found' });
 });
 
 // Centralized Error Handling Middleware (hides stack traces in production)

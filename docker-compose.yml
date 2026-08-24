@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # Database Service
+  db:
+    image: postgres:16-alpine
+    container_name: pinakee-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword123
+      POSTGRES_DB: pinakee_complaint_system
+    ports:
+      - "5433:5432" # Exposed on port 5433 to prevent collision with local native PostgreSQL on port 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Mount initialization schema scripts to boot table schemas automatically
+      - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/1-schema.sql
+      - ./backend/database/migration_002_attachments.sql:/docker-entrypoint-initdb.d/2-attachments.sql
+
+  # Application Service
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pinakee-app
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:postgrespassword123@db:5432/pinakee_complaint_system
+      PGSSLMODE: disable
+      JWT_SECRET: production_docker_jwt_secret_key_placeholder
+      JWT_EXPIRES_IN: 1d
+    depends_on:
+      - db
+
+volumes:
+  pgdata:

@@ -1,4 +1,5 @@
 const dbPool = require('../config/db');
+const logger = require('../utils/logger');
 
 /**
  * Generate a unique ticket number: PIN-YYYYMMDD-XXXX
@@ -203,6 +204,7 @@ const getComplaintById = async (req, res) => {
 
     // Enforce visibility guards
     if (!verifyComplaintAccess(user, complaint)) {
+      logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { complaintId: id, action: 'view' }, user);
       return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to view this complaint' });
     }
 
@@ -325,6 +327,8 @@ const createComplaint = async (req, res) => {
       VALUES ($1, $2, null, $3, 'Complaint registered successfully')
     `, [result.rows[0].id, user.id, statusId]);
 
+    logger.audit('COMPLAINT_CREATED', { complaintId: result.rows[0].id, ticketNumber: result.rows[0].ticket_number }, user);
+
     return res.status(201).json({
       success: true,
       message: 'Complaint submitted successfully',
@@ -370,6 +374,7 @@ const updateComplaint = async (req, res) => {
     const isCreator = complaint.created_by_id === user.id;
 
     if (!isAdmin && !isCreator) {
+      logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { complaintId: id, action: 'update' }, user);
       return res.status(403).json({ success: false, message: 'Forbidden: You cannot modify this complaint' });
     }
 
@@ -422,6 +427,8 @@ const updateComplaint = async (req, res) => {
       RETURNING *
     `;
     const updateResult = await dbPool.query(updateQuery, values);
+
+    logger.audit('COMPLAINT_UPDATED', { complaintId: id }, user);
 
     return res.status(200).json({
       success: true,
@@ -756,6 +763,7 @@ const exportComplaints = async (req, res) => {
 
   // Double check ADMIN role authorization
   if (user.role !== 'ADMIN') {
+    logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { action: 'export_csv' }, user);
     return res.status(403).json({ success: false, message: 'Forbidden: Admin access only' });
   }
 
@@ -781,6 +789,7 @@ const exportComplaints = async (req, res) => {
     `;
 
     const result = await dbPool.query(query);
+    logger.audit('COMPLAINTS_EXPORTED_CSV', { recordCount: result.rows.length }, user);
 
     // Format helper to escape CSV values containing commas or quotes
     const escapeCSV = (val) => {

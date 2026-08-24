@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const dbPool = require('../config/db');
 const { generateToken } = require('../utils/jwt');
+const logger = require('../utils/logger');
 
 /**
  * Handle user login.
@@ -37,6 +38,7 @@ const login = async (req, res) => {
     const result = await dbPool.query(query, [email.toLowerCase().trim()]);
 
     if (result.rows.length === 0) {
+      logger.audit('AUTH_FAILED', { email: email.toLowerCase().trim(), reason: 'User not found' });
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password'
@@ -47,6 +49,7 @@ const login = async (req, res) => {
 
     // Check if user is active
     if (!user.is_active) {
+      logger.audit('AUTH_FAILED', { email: user.email, reason: 'Account deactivated' });
       return res.status(403).json({
         success: false,
         message: 'Your account has been deactivated. Please contact an administrator.'
@@ -56,6 +59,7 @@ const login = async (req, res) => {
     // Compare hashed password
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     if (!isPasswordValid) {
+      logger.audit('AUTH_FAILED', { email: user.email, reason: 'Incorrect password' });
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password'
@@ -78,6 +82,8 @@ const login = async (req, res) => {
       role: user.role,
       department: user.department
     };
+
+    logger.audit('AUTH_SUCCESS', { email: user.email }, safeUser);
 
     return res.status(200).json({
       success: true,

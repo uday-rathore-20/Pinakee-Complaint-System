@@ -5,12 +5,17 @@ const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 const dbPool = require('./config/db');
 const { sanitizePayloadMiddleware } = require('./utils/sanitize');
+const logger = require('./utils/logger');
+const httpLogger = require('./middleware/auditLogger');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Enable Helmet for secure HTTP response headers
 app.use(helmet());
+
+// Enable HTTP request logging via Morgan routed to Winston
+app.use(httpLogger);
 
 // Configure CORS to restrict allowed origins from .env (whitelisting)
 const allowedOrigins = process.env.ALLOWED_ORIGINS
@@ -28,6 +33,7 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      logger.audit('CORS_BLOCKED', { origin: origin || 'none', allowedOrigins });
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -44,6 +50,14 @@ app.use(sanitizePayloadMiddleware);
 const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
+  handler: (req, res, next, options) => {
+    logger.audit('RATE_LIMIT_BLOCKED', {
+      ip: req.ip,
+      url: req.originalUrl,
+      method: req.method
+    });
+    res.status(options.statusCode).json(options.message);
+  },
   message: {
     success: false,
     message: 'Too many login attempts, please try again after 15 minutes'
@@ -135,7 +149,7 @@ app.all('/api/*', (req, res) => {
 
 // Centralized Error Handling Middleware (hides stack traces in production)
 app.use((err, req, res, next) => {
-  console.error('Unhandled Error:', err.message);
+  logger.error('Unhandled Error:', { message: err.message, stack: err.stack });
   
   const isProduction = process.env.NODE_ENV === 'production';
   return res.status(err.status || 500).json({
@@ -147,17 +161,17 @@ app.use((err, req, res, next) => {
 
 // Start Server
 const server = app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  logger.info(`Server is running on port ${PORT}`);
 });
 
 // Graceful shutdown handling
 process.on('SIGINT', () => {
-  console.log('SIGINT signal received: closing HTTP server');
+  logger.info('SIGINT signal received: closing HTTP server');
   server.close(() => {
-    console.log('HTTP server closed');
+    logger.info('HTTP server closed');
     if (dbPool) {
       dbPool.end(() => {
-        console.log('Database pool has ended');
+        logger.info('Database pool has ended');
         process.exit(0);
       });
     } else {
@@ -167,12 +181,12 @@ process.on('SIGINT', () => {
 });
 
 process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
+  logger.info('SIGTERM signal received: closing HTTP server');
   server.close(() => {
-    console.log('HTTP server closed');
+    logger.info('HTTP server closed');
     if (dbPool) {
       dbPool.end(() => {
-        console.log('Database pool has ended');
+        logger.info('Database pool has ended');
         process.exit(0);
       });
     } else {

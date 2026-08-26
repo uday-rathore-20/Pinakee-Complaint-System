@@ -84,6 +84,151 @@ PINakee Support Team`;
 
     this.logEmail(creator.email, subject, body);
   }
+  /**
+   * Create an in-app notification entry.
+   */
+  async createNotification(userId, complaintId, type, title, message) {
+    const dbPool = require('../config/db');
+    if (!dbPool) return;
+    try {
+      await dbPool.query(`
+        INSERT INTO in_app_notifications (user_id, complaint_id, type, title, message)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [userId, complaintId || null, type, title, message]);
+    } catch (err) {
+      console.error('Failed to create in-app notification:', err.message);
+    }
+  }
+
+  /**
+   * Notify admins when a complaint is created.
+   */
+  async notifyComplaintCreated(complaint) {
+    const dbPool = require('../config/db');
+    if (!dbPool) return;
+    try {
+      const adminsResult = await dbPool.query("SELECT id FROM users WHERE role_id = 1 AND is_active = true");
+      for (const admin of adminsResult.rows) {
+        await this.createNotification(
+          admin.id,
+          complaint.id,
+          'COMPLAINT_CREATED',
+          'New Complaint Created',
+          `A new complaint #${complaint.ticket_number} ("${complaint.title}") has been registered.`
+        );
+      }
+    } catch (err) {
+      console.error('Failed to notify complaint created:', err.message);
+    }
+  }
+
+  /**
+   * Notify assigned agent when a complaint is assigned.
+   */
+  async notifyComplaintAssigned(complaint, assigneeId) {
+    if (!assigneeId) return;
+    await this.createNotification(
+      assigneeId,
+      complaint.id,
+      'COMPLAINT_ASSIGNED',
+      'Complaint Assigned',
+      `You have been assigned to complaint #${complaint.ticket_number} ("${complaint.title}").`
+    );
+  }
+
+  /**
+   * Notify relevant parties when status changes.
+   */
+  async notifyStatusChanged(complaint, oldStatus, newStatus) {
+    // Notify customer if status resolves
+    if (newStatus === 'Resolved') {
+      await this.createNotification(
+        complaint.created_by_id,
+        complaint.id,
+        'STATUS_RESOLVED',
+        'Complaint Resolved',
+        `Your complaint #${complaint.ticket_number} has been marked as Resolved.`
+      );
+    }
+    // Notify customer if status closes
+    if (newStatus === 'Closed') {
+      await this.createNotification(
+        complaint.created_by_id,
+        complaint.id,
+        'STATUS_CLOSED',
+        'Complaint Closed',
+        `Your complaint #${complaint.ticket_number} has been marked as Closed.`
+      );
+    }
+    // Notify admins and department heads if marked in progress
+    if (newStatus === 'In Progress') {
+      const dbPool = require('../config/db');
+      if (dbPool) {
+        const receivers = [];
+        const adminRes = await dbPool.query('SELECT id FROM users WHERE role_id = 1 AND is_active = true');
+        receivers.push(...adminRes.rows.map(r => r.id));
+        if (complaint.department_id) {
+          const headRes = await dbPool.query('SELECT id FROM users WHERE role_id = 2 AND department_id = $1 AND is_active = true', [complaint.department_id]);
+          receivers.push(...headRes.rows.map(r => r.id));
+        }
+        const uniqueIds = [...new Set(receivers)];
+        for (const rId of uniqueIds) {
+          await this.createNotification(
+            rId,
+            complaint.id,
+            'STATUS_IN_PROGRESS',
+            'Complaint In Progress',
+            `Complaint #${complaint.ticket_number} ("${complaint.title}") is now In Progress.`
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Notify customer when FCR is submitted.
+   */
+  async notifyFcrSubmitted(complaint) {
+    await this.createNotification(
+      complaint.created_by_id,
+      complaint.id,
+      'FCR_SUBMITTED',
+      'Service Call Report Submitted',
+      `An Engineer has submitted the Service Call Report for complaint #${complaint.ticket_number}. Please review and confirm resolution.`
+    );
+  }
+
+  /**
+   * Notify internal staff when FCR is finalized/confirmed by customer.
+   */
+  async notifyFcrFinalized(complaint) {
+    const dbPool = require('../config/db');
+    if (!dbPool) return;
+    try {
+      const receivers = [];
+      if (complaint.assigned_to_id) {
+        receivers.push(complaint.assigned_to_id);
+      }
+      const adminRes = await dbPool.query('SELECT id FROM users WHERE role_id = 1 AND is_active = true');
+      receivers.push(...adminRes.rows.map(r => r.id));
+      if (complaint.department_id) {
+        const headRes = await dbPool.query('SELECT id FROM users WHERE role_id = 2 AND department_id = $1 AND is_active = true', [complaint.department_id]);
+        receivers.push(...headRes.rows.map(r => r.id));
+      }
+      const uniqueIds = [...new Set(receivers)];
+      for (const rId of uniqueIds) {
+        await this.createNotification(
+          rId,
+          complaint.id,
+          'FCR_FINALIZED',
+          'Service Call Report Finalized',
+          `Customer has confirmed and finalized the Service Call Report for complaint #${complaint.ticket_number}.`
+        );
+      }
+    } catch (err) {
+      console.error('Failed to notify FCR finalized:', err.message);
+    }
+  }
 }
 
 module.exports = new NotificationService();

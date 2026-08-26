@@ -362,11 +362,14 @@ const submitFcr = async (req, res) => {
 
     logger.audit('COMPLAINT_RESOLVED', { complaintId: id, ticketNumber: complaint.ticket_number }, user);
 
+    const notifications = require('../utils/notifications');
+    notifications.notifyFcrSubmitted(complaint).catch(err => console.error('Failed to trigger FCR submitted in-app notification:', err));
+    notifications.notifyStatusChanged(complaint, 'In Progress', 'Resolved').catch(err => console.error('Failed to trigger Resolved status in-app notification:', err));
+
     // Send email notification to creator
     const creatorResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.created_by_id]);
     if (creatorResult.rows.length > 0) {
       const creatorUser = creatorResult.rows[0];
-      const notifications = require('../utils/notifications');
       notifications.sendResolutionNotification({
         ticket_number: complaint.ticket_number,
         title: complaint.title
@@ -459,6 +462,10 @@ const confirmFcr = async (req, res) => {
     `, [id, user.id, complaint.status_id, closedStatusId, auditRemark]);
 
     logger.audit('COMPLAINT_CLOSED', { complaintId: id, ticketNumber: complaint.ticket_number }, user);
+
+    const notifications = require('../utils/notifications');
+    notifications.notifyFcrFinalized(complaint).catch(err => console.error('Failed to trigger FCR finalized in-app notification:', err));
+    notifications.notifyStatusChanged(complaint, 'Resolved', 'Closed').catch(err => console.error('Failed to trigger Closed status in-app notification:', err));
 
     return res.status(200).json({
       success: true,

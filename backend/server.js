@@ -77,6 +77,7 @@ const complaintsRoutes = require('./routes/complaints.routes');
 const fcrRoutes = require('./routes/fcr.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const attachmentsRoutes = require('./routes/attachments.routes');
+const notificationsRoutes = require('./routes/notifications.routes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
@@ -85,6 +86,7 @@ app.use('/api/complaints', complaintsRoutes);
 app.use('/api/complaints', fcrRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api', attachmentsRoutes);
+app.use('/api/notifications', notificationsRoutes);
 
 // Root route (friendly greeting) - Dev only
 if (process.env.NODE_ENV !== 'production') {

@@ -348,6 +348,9 @@ const createComplaint = async (req, res) => {
 
     logger.audit('COMPLAINT_CREATED', { complaintId: result.rows[0].id, ticketNumber: result.rows[0].ticket_number }, user);
 
+    const notifications = require('../utils/notifications');
+    notifications.notifyComplaintCreated(result.rows[0]).catch(err => console.error('Failed to trigger in-app notification:', err));
+
     return res.status(201).json({
       success: true,
       message: 'Complaint submitted successfully',
@@ -576,6 +579,8 @@ const assignComplaint = async (req, res) => {
           title: result.rows[0].title,
           priority: complaint.priority
         }, assigneeUser).catch(err => console.error('Failed to dispatch assignment email:', err));
+
+        notifications.notifyComplaintAssigned(result.rows[0], finalAssigneeId).catch(err => console.error('Failed to trigger in-app assignment notification:', err));
       }
     }
 
@@ -666,6 +671,9 @@ const claimComplaint = async (req, res) => {
     `, [id, user.id, complaint.status_id, targetStatusId, auditRemark]);
 
     logger.audit('COMPLAINT_CLAIMED', { complaintId: id, ticketNumber: updateResult.rows[0].ticket_number }, user);
+
+    const notifications = require('../utils/notifications');
+    notifications.notifyComplaintAssigned(updateResult.rows[0], user.id).catch(err => console.error('Failed to trigger claim assignment notification:', err));
 
     return res.status(200).json({
       success: true,
@@ -788,6 +796,9 @@ const updateComplaintStatus = async (req, res) => {
       INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
       VALUES ($1, $2, $3, $4, $5)
     `, [id, user.id, complaint.status_id, status_id, remarks ? remarks.trim() : defaultRemarks]);
+
+    const notifications = require('../utils/notifications');
+    notifications.notifyStatusChanged(complaint, complaint.current_status_name, targetStatus.name).catch(err => console.error('Failed to trigger status change notification:', err));
 
     // Send resolution notification to creator if new status is Resolved
     if (targetStatus.name === 'Resolved') {

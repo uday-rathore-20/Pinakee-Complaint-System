@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
@@ -7,6 +7,240 @@ import Complaints from './pages/Complaints';
 import ComplaintDetail from './pages/ComplaintDetail';
 import Users from './pages/Users';
 import Profile from './pages/Profile';
+
+// In-app Notifications Dropdown Widget
+const NotificationWidget = () => {
+  const { authFetch } = useAuth();
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  const fetchNotifications = async () => {
+    try {
+      const res = await authFetch('/notifications?limit=20');
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setNotifications(result.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch notifications:', err);
+    }
+  };
+
+  const fetchUnreadCount = async () => {
+    try {
+      const res = await authFetch('/notifications/unread-count');
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setUnreadCount(result.data.count);
+      }
+    } catch (err) {
+      console.error('Failed to fetch unread count:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchNotifications();
+    fetchUnreadCount();
+
+    const interval = setInterval(() => {
+      fetchNotifications();
+      fetchUnreadCount();
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleMarkAllRead = async () => {
+    try {
+      const res = await authFetch('/notifications/mark-all-read', { method: 'POST' });
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+        setUnreadCount(0);
+      }
+    } catch (err) {
+      console.error('Failed to mark all read:', err);
+    }
+  };
+
+  const handleMarkRead = async (id) => {
+    try {
+      const res = await authFetch(`/notifications/${id}/read`, { method: 'PATCH' });
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+        setUnreadCount(prev => Math.max(0, prev - 1));
+      }
+    } catch (err) {
+      console.error('Failed to mark notification as read:', err);
+    }
+  };
+
+  return (
+    <div className="notifications-widget" ref={dropdownRef} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="notifications-trigger"
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          position: 'relative',
+          padding: '0.5rem',
+          display: 'flex',
+          alignItems: 'center',
+          color: 'var(--text-color)'
+        }}
+      >
+        <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+        </svg>
+        {unreadCount > 0 && (
+          <span className="unread-badge" style={{
+            position: 'absolute',
+            top: '2px',
+            right: '2px',
+            background: '#ef4444',
+            color: '#fff',
+            borderRadius: '50%',
+            padding: '0.15rem 0.35rem',
+            fontSize: '0.7rem',
+            fontWeight: 'bold',
+            lineHeight: 1
+          }}>
+            {unreadCount}
+          </span>
+        )}
+      </button>
+
+      {isOpen && (
+        <div className="notifications-dropdown" style={{
+          position: 'absolute',
+          right: 0,
+          top: '100%',
+          width: '320px',
+          background: '#fff',
+          border: '1px solid var(--border-color)',
+          borderRadius: '8px',
+          boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06)',
+          zIndex: 1000,
+          marginTop: '0.5rem',
+          maxHeight: '400px',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          <div className="dropdown-header" style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '0.75rem 1rem',
+            borderBottom: '1px solid var(--border-color)'
+          }}>
+            <strong style={{ fontSize: '0.9rem' }}>Notifications</strong>
+            {unreadCount > 0 && (
+              <button
+                onClick={handleMarkAllRead}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--primary-color)',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                  fontWeight: '500',
+                  padding: 0
+                }}
+              >
+                Mark all read
+              </button>
+            )}
+          </div>
+
+          <div className="dropdown-list" style={{
+            overflowY: 'auto',
+            flexGrow: 1
+          }}>
+            {notifications.length === 0 ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                No notifications yet.
+              </div>
+            ) : (
+              notifications.map(n => (
+                <div
+                  key={n.id}
+                  className={`notification-item ${n.is_read ? 'read' : 'unread'}`}
+                  style={{
+                    padding: '0.75rem 1rem',
+                    borderBottom: '1px solid #f1f5f9',
+                    background: n.is_read ? '#fff' : '#f8fafc',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.2rem',
+                    cursor: 'pointer',
+                    transition: 'background 0.2s'
+                  }}
+                  onClick={() => {
+                    if (!n.is_read) handleMarkRead(n.id);
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <span style={{
+                      fontWeight: n.is_read ? '500' : '600',
+                      fontSize: '0.85rem',
+                      color: n.is_read ? 'var(--text-color)' : 'var(--primary-dark)'
+                    }}>
+                      {n.title}
+                    </span>
+                    {!n.is_read && (
+                      <span style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        background: 'var(--primary-color)',
+                        display: 'inline-block'
+                      }} />
+                    )}
+                  </div>
+                  <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.3' }}>
+                    {n.message}
+                  </p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
+                    <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
+                      {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    {n.complaint_id && (
+                      <Link
+                        to={`/complaints/${n.complaint_id}`}
+                        onClick={() => setIsOpen(false)}
+                        style={{
+                          fontSize: '0.75rem',
+                          color: 'var(--primary-light)',
+                          textDecoration: 'none',
+                          fontWeight: '500'
+                        }}
+                      >
+                        View Ticket &rarr;
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // Sidebar Navigation Shell for Authenticated users
 const AppLayout = ({ children }) => {
@@ -81,13 +315,16 @@ const AppLayout = ({ children }) => {
 
       {/* Main Content Area */}
       <main className="main-content">
-        <header className="header">
+        <header className="header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <span style={{ color: 'var(--text-muted)' }}>Welcome back,</span>{' '}
             <strong>{user.first_name}!</strong>
           </div>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            System Time: {new Date().toLocaleDateString()}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+            <NotificationWidget />
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              System Time: {new Date().toLocaleDateString()}
+            </div>
           </div>
         </header>
         {children}

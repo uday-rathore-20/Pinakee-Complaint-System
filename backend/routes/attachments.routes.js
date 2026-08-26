@@ -5,6 +5,7 @@ const {
   uploadAttachment,
   getAttachments,
   downloadAttachment,
+  deleteAttachment,
 } = require('../controllers/attachments.controller');
 const { authenticateJWT } = require('../middleware/auth');
 
@@ -24,5 +25,8 @@ router.get('/complaints/:id/attachments', authenticateJWT, getAttachments);
 
 // Download file attachment securely (resolves by attachment ID)
 router.get('/attachments/:id', authenticateJWT, downloadAttachment);
+
+// Delete file attachment securely (resolves by attachment ID)
+router.delete('/attachments/:id', authenticateJWT, deleteAttachment);
 
 module.exports = router;

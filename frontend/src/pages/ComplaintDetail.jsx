@@ -337,6 +337,25 @@ const ComplaintDetail = () => {
     }
   };
 
+  const handleDeleteAttachment = async (attachId) => {
+    if (!window.confirm('Are you sure you want to delete this attachment?')) return;
+    setActionError('');
+    try {
+      const res = await authFetch(`/attachments/${attachId}`, {
+        method: 'DELETE'
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        await fetchAttachments();
+        await fetchComplaintDetails(); // Refresh audit comments feed
+      } else {
+        setActionError(result.message || 'Failed to delete attachment.');
+      }
+    } catch (err) {
+      setActionError('Network error deleting attachment.');
+    }
+  };
+
   const handleAddComment = async (e) => {
     e.preventDefault();
     setActionError('');
@@ -782,13 +801,24 @@ const ComplaintDetail = () => {
                         {(att.file_size / 1024).toFixed(1)} KB | Uploaded by {att.first_name} {att.last_name} ({att.role})
                       </div>
                     </div>
-                    <button
-                      className="btn btn-secondary"
-                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                      onClick={() => handleDownloadAttachment(att.id, att.file_name)}
-                    >
-                      Download
-                    </button>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                        onClick={() => handleDownloadAttachment(att.id, att.file_name)}
+                      >
+                        Download
+                      </button>
+                      {(user.role === 'ADMIN' || (att.uploaded_by_id === user.id && complaint.status !== 'Closed')) && (
+                        <button
+                          className="btn btn-danger"
+                          style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', whiteSpace: 'nowrap', backgroundColor: '#ef4444', borderColor: '#ef4444', color: '#fff' }}
+                          onClick={() => handleDeleteAttachment(att.id)}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>

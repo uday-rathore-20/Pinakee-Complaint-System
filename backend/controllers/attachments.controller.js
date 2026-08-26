@@ -183,8 +183,89 @@ const downloadAttachment = async (req, res) => {
   }
 };
 
+/**
+ * Delete an attachment securely.
+ * DELETE /api/attachments/:id
+ */
+const deleteAttachment = async (req, res) => {
+  const { id } = req.params;
+  const user = req.user;
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    // Fetch attachment metadata and associated complaint details
+    const attachQuery = `
+      SELECT a.*, c.created_by_id, c.department_id, c.assigned_to_id, c.status_id
+      FROM complaint_attachments a
+      JOIN complaints c ON a.complaint_id = c.id
+      WHERE a.id = $1
+    `;
+    const attachResult = await dbPool.query(attachQuery, [id]);
+
+    if (attachResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Attachment not found' });
+    }
+
+    const attachment = attachResult.rows[0];
+    const complaint = {
+      created_by_id: attachment.created_by_id,
+      department_id: attachment.department_id,
+      assigned_to_id: attachment.assigned_to_id
+    };
+
+    // Verify access to the associated complaint
+    if (!verifyComplaintAccess(user, complaint)) {
+      return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to access this attachment' });
+    }
+
+    // Check Closed status status_id
+    const closedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Closed'");
+    const closedId = closedStatusResult.rows[0]?.id;
+
+    // Check deletion permissions:
+    // ADMIN can delete anything.
+    // Other roles can delete ONLY if they uploaded it AND the ticket is not Closed.
+    const isAdmin = user.role === 'ADMIN';
+    const isOwner = attachment.uploaded_by_id === user.id;
+
+    if (!isAdmin) {
+      if (!isOwner) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You can only delete attachments that you uploaded' });
+      }
+      if (attachment.status_id === closedId) {
+        return res.status(400).json({ success: false, message: 'Attachments cannot be deleted from closed complaints' });
+      }
+    }
+
+    // Delete file from disk via storage driver
+    await storage.deleteFile(attachment.file_path);
+
+    // Remove record from database
+    await dbPool.query('DELETE FROM complaint_attachments WHERE id = $1', [id]);
+
+    // Add a comment to audit log discussion
+    await dbPool.query(`
+      INSERT INTO complaint_comments (complaint_id, user_id, comment_text, is_internal)
+      VALUES ($1, $2, $3, false)
+    `, [attachment.complaint_id, user.id, `Removed attached file: ${attachment.file_name}`]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Attachment deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete attachment error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to delete attachment' });
+  }
+};
+
 module.exports = {
   uploadAttachment,
   getAttachments,
   downloadAttachment,
+  deleteAttachment,
 };

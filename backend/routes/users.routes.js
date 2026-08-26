@@ -17,11 +17,11 @@ router.put('/profile', authenticateJWT, updateUserProfile);
 // PUT /api/users/profile/password -> Update logged-in user password securely (requires authentication)
 router.put('/profile/password', authenticateJWT, changeUserPassword);
 
-// GET /api/users -> List all users (requires authentication)
-router.get('/', authenticateJWT, getUsers);
+// GET /api/users -> List all users (restricted to ADMIN and DEPT_HEAD)
+router.get('/', authenticateJWT, requireRole('ADMIN', 'DEPT_HEAD'), getUsers);
 
-// GET /api/users/:id -> Get specific user details (requires authentication)
-router.get('/:id', authenticateJWT, getUserById);
+// GET /api/users/:id -> Get specific user details (restricted to ADMIN)
+router.get('/:id', authenticateJWT, requireRole('ADMIN'), getUserById);
 
 // POST /api/users -> Create a new user (restricted to ADMIN)
 router.post('/', authenticateJWT, requireRole('ADMIN'), createUser);

@@ -10,6 +10,7 @@ const Users = () => {
   
   // Modal & Form States
   const [showModal, setShowModal] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
@@ -65,6 +66,35 @@ const Users = () => {
     init();
   }, []);
 
+  const handleOpenCreateModal = () => {
+    setEditingUser(null);
+    setFirstName('');
+    setLastName('');
+    setEmail('');
+    setPassword('');
+    setRoleId('');
+    setDeptId('');
+    setFormError('');
+    setShowModal(true);
+  };
+
+  const handleOpenEditModal = (userRecord) => {
+    setEditingUser(userRecord);
+    setFirstName(userRecord.first_name);
+    setLastName(userRecord.last_name);
+    setEmail(userRecord.email);
+    setPassword('');
+
+    const matchedRole = roles.find(r => r.name === userRecord.role);
+    setRoleId(matchedRole ? matchedRole.id.toString() : '');
+
+    const matchedDept = departments.find(d => d.name === userRecord.department);
+    setDeptId(matchedDept ? matchedDept.id.toString() : '');
+
+    setFormError('');
+    setShowModal(true);
+  };
+
   const handleToggleStatus = async (userRecord) => {
     setError('');
     const targetStatus = !userRecord.is_active;
@@ -87,44 +117,58 @@ const Users = () => {
     }
   };
 
-  const handleCreateUser = async (e) => {
+  const handleSubmitUser = async (e) => {
     e.preventDefault();
     setFormError('');
     setFormSubmitting(true);
 
-    if (!firstName || !lastName || !email || !password || !roleId) {
-      setFormError('All fields (except Department) are required.');
-      setFormSubmitting(false);
-      return;
+    if (editingUser) {
+      if (!firstName || !lastName || !email || !roleId) {
+        setFormError('First Name, Last Name, Email, and Role are required.');
+        setFormSubmitting(false);
+        return;
+      }
+    } else {
+      if (!firstName || !lastName || !email || !password || !roleId) {
+        setFormError('All fields (including temporary password) are required.');
+        setFormSubmitting(false);
+        return;
+      }
     }
 
     try {
-      const res = await authFetch('/users', {
-        method: 'POST',
-        body: JSON.stringify({
-          first_name: firstName,
-          last_name: lastName,
-          email,
-          password,
-          role_id: parseInt(roleId),
-          department_id: deptId ? parseInt(deptId) : null
-        })
+      const url = editingUser ? `/users/${editingUser.id}` : '/users';
+      const method = editingUser ? 'PUT' : 'POST';
+      const bodyPayload = {
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        email: email.trim(),
+        role_id: parseInt(roleId),
+        department_id: deptId ? parseInt(deptId) : null
+      };
+
+      if (password) {
+        bodyPayload.password = password;
+      }
+
+      const res = await authFetch(url, {
+        method,
+        body: JSON.stringify(bodyPayload)
       });
       const result = await res.json();
 
       if (res.ok && result.success) {
-        // Reset states and close modal
         setFirstName('');
         setLastName('');
         setEmail('');
         setPassword('');
         setRoleId('');
         setDeptId('');
+        setEditingUser(null);
         setShowModal(false);
-        // Refresh users list
         await fetchUsersList();
       } else {
-        setFormError(result.message || 'User creation failed.');
+        setFormError(result.message || (editingUser ? 'User update failed.' : 'User creation failed.'));
       }
     } catch (err) {
       setFormError('Server is currently unreachable.');
@@ -141,7 +185,7 @@ const Users = () => {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <h1>User Administration Panel</h1>
-        <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+        <button className="btn btn-primary" onClick={handleOpenCreateModal}>
           Create User Account
         </button>
       </div>
@@ -180,6 +224,13 @@ const Users = () => {
                   </td>
                   <td>
                     <button
+                      className="btn btn-secondary"
+                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', marginRight: '0.5rem' }}
+                      onClick={() => handleOpenEditModal(u)}
+                    >
+                      Edit
+                    </button>
+                    <button
                       className={`btn ${u.is_active ? 'btn-danger' : 'btn-secondary'}`}
                       style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
                       onClick={() => handleToggleStatus(u)}
@@ -194,12 +245,12 @@ const Users = () => {
         </div>
       </div>
 
-      {/* Create User Modal */}
+      {/* Create / Edit User Modal */}
       {showModal && (
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header">
-              <h2>Create a New User Account</h2>
+              <h2>{editingUser ? 'Edit User Account' : 'Create a New User Account'}</h2>
               <button
                 style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
                 onClick={() => setShowModal(false)}
@@ -210,7 +261,7 @@ const Users = () => {
 
             {formError && <div className="alert alert-danger">{formError}</div>}
 
-            <form onSubmit={handleCreateUser}>
+            <form onSubmit={handleSubmitUser}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
                 <div className="form-group" style={{ margin: '0' }}>
                   <label className="form-label">First Name</label>
@@ -247,14 +298,16 @@ const Users = () => {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Temporary Password</label>
+                <label className="form-label">
+                  {editingUser ? 'New Password (Optional)' : 'Temporary Password'}
+                </label>
                 <input
                   type="password"
                   className="form-input"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Minimum 6 characters"
-                  required
+                  placeholder={editingUser ? "Leave blank to keep current" : "Minimum 6 characters"}
+                  required={!editingUser}
                 />
               </div>
 
@@ -291,7 +344,7 @@ const Users = () => {
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={formSubmitting}>
-                  {formSubmitting ? 'Creating...' : 'Create Account'}
+                  {formSubmitting ? (editingUser ? 'Saving...' : 'Creating...') : (editingUser ? 'Save Changes' : 'Create Account')}
                 </button>
               </div>
             </form>

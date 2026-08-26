@@ -61,8 +61,9 @@ const logger = winston.createLogger({
  * @param {string} action - Audit action name (e.g., 'AUTH_FAILED', 'RATE_LIMIT_BLOCKED')
  * @param {Object} details - Action-specific attributes
  * @param {Object} [user] - Requester user context
+ * @param {string} [ipAddress] - IP Address of request
  */
-logger.audit = (action, details = {}, user = null) => {
+logger.audit = (action, details = {}, user = null, ipAddress = null) => {
   logger.info({
     message: `Security Audit: ${action}`,
     isAudit: true,
@@ -73,6 +74,27 @@ logger.audit = (action, details = {}, user = null) => {
     userEmail: user?.email || 'anonymous',
     timestamp: new Date().toISOString()
   });
+
+  // Asynchronously insert row into PostgreSQL audit_logs table
+  const dbPool = require('../config/db');
+  if (dbPool) {
+    const userIdVal = user && user.id && user.id !== 'anonymous' ? user.id : null;
+    const description = `Security Audit: ${action}`;
+    const cleanDetails = { ...details };
+    // Security sanitization: strip sensitive items from details before DB insertion
+    if (cleanDetails.password) delete cleanDetails.password;
+    if (cleanDetails.new_password) delete cleanDetails.new_password;
+    if (cleanDetails.token) delete cleanDetails.token;
+    if (cleanDetails.password_hash) delete cleanDetails.password_hash;
+    if (cleanDetails.reset_token) delete cleanDetails.reset_token;
+
+    dbPool.query(
+      'INSERT INTO audit_logs (user_id, action_type, description, ip_address, metadata_json) VALUES ($1, $2, $3, $4, $5)',
+      [userIdVal, action, description, ipAddress || null, JSON.stringify(cleanDetails)]
+    ).catch(err => {
+      console.error('Failed to insert audit log record into database:', err.message);
+    });
+  }
 };
 
 module.exports = logger;

@@ -194,6 +194,9 @@ const createUser = async (req, res) => {
     `;
     const fetchResult = await dbPool.query(fetchQuery, [newUserId]);
 
+    const logger = require('../utils/logger');
+    logger.audit('USER_CREATED', { createdUserId: newUserId, email: email.toLowerCase().trim() }, req.user, req.ip);
+
     return res.status(201).json({
       success: true,
       message: 'User created successfully',
@@ -318,6 +321,9 @@ const updateUser = async (req, res) => {
     `;
     const fetchResult = await dbPool.query(fetchQuery, [id]);
 
+    const logger = require('../utils/logger');
+    logger.audit('USER_UPDATED', { updatedUserId: id }, req.user, req.ip);
+
     return res.status(200).json({
       success: true,
       message: 'User updated successfully',
@@ -367,6 +373,9 @@ const updateUserStatus = async (req, res) => {
         message: 'User not found'
       });
     }
+
+    const logger = require('../utils/logger');
+    logger.audit('USER_STATUS_TOGGLED', { updatedUserId: id, is_active }, req.user, req.ip);
 
     return res.status(200).json({
       success: true,
@@ -487,7 +496,7 @@ const exportUsers = async (req, res) => {
   // Double check ADMIN role authorization
   if (user.role !== 'ADMIN') {
     const logger = require('../utils/logger');
-    logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { action: 'export_users_csv' }, user);
+    logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { action: 'export_users_csv' }, user, req.ip);
     return res.status(403).json({ success: false, message: 'Forbidden: Admin access only' });
   }
 
@@ -507,7 +516,7 @@ const exportUsers = async (req, res) => {
 
     const result = await dbPool.query(query);
     const logger = require('../utils/logger');
-    logger.audit('USERS_EXPORTED_CSV', { recordCount: result.rows.length }, user);
+    logger.audit('USERS_EXPORTED_CSV', { recordCount: result.rows.length }, user, req.ip);
 
     const escapeCSV = (val) => {
       if (val === null || val === undefined) return '';

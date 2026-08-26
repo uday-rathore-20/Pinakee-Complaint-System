@@ -72,6 +72,9 @@ const uploadAttachment = async (req, res) => {
       VALUES ($1, $2, $3, false)
     `, [id, user.id, `Attached file: ${req.file.originalname}`]);
 
+    const logger = require('../utils/logger');
+    logger.audit('ATTACHMENT_UPLOADED', { complaintId: id, fileName: req.file.originalname }, user, req.ip);
+
     return res.status(201).json({
       success: true,
       message: 'Attachment uploaded successfully',
@@ -251,6 +254,9 @@ const deleteAttachment = async (req, res) => {
       INSERT INTO complaint_comments (complaint_id, user_id, comment_text, is_internal)
       VALUES ($1, $2, $3, false)
     `, [attachment.complaint_id, user.id, `Removed attached file: ${attachment.file_name}`]);
+
+    const logger = require('../utils/logger');
+    logger.audit('ATTACHMENT_DELETED', { complaintId: attachment.complaint_id, fileName: attachment.file_name }, user, req.ip);
 
     return res.status(200).json({
       success: true,

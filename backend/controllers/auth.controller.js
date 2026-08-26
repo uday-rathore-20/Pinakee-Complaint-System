@@ -40,7 +40,7 @@ const login = async (req, res) => {
     const result = await dbPool.query(query, [email.toLowerCase().trim()]);
 
     if (result.rows.length === 0) {
-      logger.audit('AUTH_FAILED', { email: email.toLowerCase().trim(), reason: 'User not found' });
+      logger.audit('AUTH_FAILED', { email: email.toLowerCase().trim(), reason: 'User not found' }, null, req.ip);
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password'
@@ -60,7 +60,7 @@ const login = async (req, res) => {
 
     // Check if user is active
     if (!user.is_active) {
-      logger.audit('AUTH_FAILED', { email: user.email, reason: 'Account deactivated' });
+      logger.audit('AUTH_FAILED', { email: user.email, reason: 'Account deactivated' }, user, req.ip);
       return res.status(403).json({
         success: false,
         message: 'Your account has been deactivated. Please contact an administrator.'
@@ -84,7 +84,7 @@ const login = async (req, res) => {
           'UPDATE users SET failed_login_attempts = $1, locked_until = $2 WHERE id = $3',
           [newAttempts, lockTime, user.id]
         );
-        logger.audit('AUTH_FAILED_LOCKED', { email: user.email, attempts: newAttempts });
+        logger.audit('AUTH_FAILED_LOCKED', { email: user.email, attempts: newAttempts }, user, req.ip);
         return res.status(423).json({
           success: false,
           message: 'This account has been temporarily locked due to consecutive failed login attempts. Please try again after 15 minutes.'
@@ -94,7 +94,7 @@ const login = async (req, res) => {
           'UPDATE users SET failed_login_attempts = $1, locked_until = NULL WHERE id = $2',
           [newAttempts, user.id]
         );
-        logger.audit('AUTH_FAILED', { email: user.email, reason: 'Incorrect password', attempts: newAttempts });
+        logger.audit('AUTH_FAILED', { email: user.email, reason: 'Incorrect password', attempts: newAttempts }, user, req.ip);
         return res.status(401).json({
           success: false,
           message: 'Invalid email or password'
@@ -127,7 +127,7 @@ const login = async (req, res) => {
       department: user.department
     };
 
-    logger.audit('AUTH_SUCCESS', { email: user.email }, safeUser);
+    logger.audit('AUTH_SUCCESS', { email: user.email }, safeUser, req.ip);
 
     return res.status(200).json({
       success: true,
@@ -256,7 +256,7 @@ const resetPassword = async (req, res) => {
       [newPasswordHash, user.id]
     );
 
-    logger.audit('PASSWORD_RECOVERED', { email: user.email });
+    logger.audit('PASSWORD_RECOVERED', { email: user.email }, user, req.ip);
 
     return res.status(200).json({
       success: true,

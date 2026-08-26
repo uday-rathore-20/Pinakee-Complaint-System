@@ -8,6 +8,7 @@ import ComplaintDetail from './pages/ComplaintDetail';
 import Users from './pages/Users';
 import Profile from './pages/Profile';
 import Reports from './pages/Reports';
+import AuditLogs from './pages/AuditLogs';
 
 // In-app Notifications Dropdown Widget
 const NotificationWidget = () => {
@@ -305,12 +306,20 @@ const AppLayout = ({ children }) => {
           )}
 
           {user.role === 'ADMIN' && (
-            <Link to="/users" className={`sidebar-link ${isLinkActive('/users') ? 'active' : ''}`}>
-              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a3 3 0 11-6 0 3 3 0 016 0z"/>
-              </svg>
-              Users
-            </Link>
+            <>
+              <Link to="/users" className={`sidebar-link ${isLinkActive('/users') ? 'active' : ''}`}>
+                <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+                Users
+              </Link>
+              <Link to="/audit-logs" className={`sidebar-link ${isLinkActive('/audit-logs') ? 'active' : ''}`}>
+                <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Audit Trails
+              </Link>
+            </>
           )}
         </nav>
 
@@ -452,6 +461,14 @@ function App() {
             <ProtectedRoute>
               <AdminRoute>
                 <Users />
+              </AdminRoute>
+            </ProtectedRoute>
+          } />
+
+          <Route path="/audit-logs" element={
+            <ProtectedRoute>
+              <AdminRoute>
+                <AuditLogs />
               </AdminRoute>
             </ProtectedRoute>
           } />

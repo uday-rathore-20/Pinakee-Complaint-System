@@ -55,7 +55,7 @@ const loginRateLimiter = rateLimit({
       ip: req.ip,
       url: req.originalUrl,
       method: req.method
-    });
+    }, null, req.ip);
     res.status(options.statusCode).json(options.message);
   },
   message: {
@@ -79,6 +79,7 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const attachmentsRoutes = require('./routes/attachments.routes');
 const notificationsRoutes = require('./routes/notifications.routes');
 const reportsRoutes = require('./routes/reports.routes');
+const auditLogsRoutes = require('./routes/auditLogs.routes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
@@ -89,6 +90,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api', attachmentsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/audit-logs', auditLogsRoutes);
 
 // Root route (friendly greeting) - Dev only
 if (process.env.NODE_ENV !== 'production') {

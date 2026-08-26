@@ -228,7 +228,7 @@ const getComplaintById = async (req, res) => {
 
     // Enforce visibility guards
     if (!verifyComplaintAccess(user, complaint)) {
-      logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { complaintId: id, action: 'view' }, user);
+      logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { complaintId: id, action: 'view' }, user, req.ip);
       return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to view this complaint' });
     }
 
@@ -355,7 +355,7 @@ const createComplaint = async (req, res) => {
       VALUES ($1, $2, null, $3, 'Complaint registered successfully')
     `, [result.rows[0].id, user.id, statusId]);
 
-    logger.audit('COMPLAINT_CREATED', { complaintId: result.rows[0].id, ticketNumber: result.rows[0].ticket_number }, user);
+    logger.audit('COMPLAINT_CREATED', { complaintId: result.rows[0].id, ticketNumber: result.rows[0].ticket_number }, user, req.ip);
 
     const notifications = require('../utils/notifications');
     notifications.notifyComplaintCreated(result.rows[0]).catch(err => console.error('Failed to trigger in-app notification:', err));
@@ -405,7 +405,7 @@ const updateComplaint = async (req, res) => {
     const isCreator = complaint.created_by_id === user.id;
 
     if (!isAdmin && !isCreator) {
-      logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { complaintId: id, action: 'update' }, user);
+      logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { complaintId: id, action: 'update' }, user, req.ip);
       return res.status(403).json({ success: false, message: 'Forbidden: You cannot modify this complaint' });
     }
 
@@ -466,7 +466,7 @@ const updateComplaint = async (req, res) => {
     `;
     const updateResult = await dbPool.query(updateQuery, values);
 
-    logger.audit('COMPLAINT_UPDATED', { complaintId: id }, user);
+    logger.audit('COMPLAINT_UPDATED', { complaintId: id }, user, req.ip);
 
     return res.status(200).json({
       success: true,
@@ -686,7 +686,7 @@ const claimComplaint = async (req, res) => {
       VALUES ($1, $2, $3, $4, $5)
     `, [id, user.id, complaint.status_id, targetStatusId, auditRemark]);
 
-    logger.audit('COMPLAINT_CLAIMED', { complaintId: id, ticketNumber: updateResult.rows[0].ticket_number }, user);
+    logger.audit('COMPLAINT_CLAIMED', { complaintId: id, ticketNumber: updateResult.rows[0].ticket_number }, user, req.ip);
 
     const notifications = require('../utils/notifications');
     notifications.notifyComplaintAssigned(updateResult.rows[0], user.id).catch(err => console.error('Failed to trigger claim assignment notification:', err));
@@ -933,7 +933,7 @@ const exportComplaints = async (req, res) => {
 
   // Double check ADMIN role authorization
   if (user.role !== 'ADMIN') {
-    logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { action: 'export_csv' }, user);
+    logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { action: 'export_csv' }, user, req.ip);
     return res.status(403).json({ success: false, message: 'Forbidden: Admin access only' });
   }
 
@@ -959,7 +959,7 @@ const exportComplaints = async (req, res) => {
     `;
 
     const result = await dbPool.query(query);
-    logger.audit('COMPLAINTS_EXPORTED_CSV', { recordCount: result.rows.length }, user);
+    logger.audit('COMPLAINTS_EXPORTED_CSV', { recordCount: result.rows.length }, user, req.ip);
 
     // Format helper to escape CSV values containing commas or quotes
     const escapeCSV = (val) => {

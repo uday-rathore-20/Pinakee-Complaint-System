@@ -360,7 +360,7 @@ const submitFcr = async (req, res) => {
       VALUES ($1, $2, $3, $4, $5)
     `, [id, user.id, complaint.status_id, resolvedStatusId, auditRemark]);
 
-    logger.audit('COMPLAINT_RESOLVED', { complaintId: id, ticketNumber: complaint.ticket_number }, user);
+    logger.audit('COMPLAINT_RESOLVED', { complaintId: id, ticketNumber: complaint.ticket_number }, user, req.ip);
 
     const notifications = require('../utils/notifications');
     notifications.notifyFcrSubmitted(complaint).catch(err => console.error('Failed to trigger FCR submitted in-app notification:', err));
@@ -461,7 +461,7 @@ const confirmFcr = async (req, res) => {
       VALUES ($1, $2, $3, $4, $5)
     `, [id, user.id, complaint.status_id, closedStatusId, auditRemark]);
 
-    logger.audit('COMPLAINT_CLOSED', { complaintId: id, ticketNumber: complaint.ticket_number }, user);
+    logger.audit('COMPLAINT_CLOSED', { complaintId: id, ticketNumber: complaint.ticket_number }, user, req.ip);
 
     const notifications = require('../utils/notifications');
     notifications.notifyFcrFinalized(complaint).catch(err => console.error('Failed to trigger FCR finalized in-app notification:', err));

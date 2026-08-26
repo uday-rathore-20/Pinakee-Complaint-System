@@ -982,6 +982,23 @@ const ComplaintDetail = () => {
                 <span style={{ color: 'var(--text-muted)' }}>Date Created:</span>{' '}
                 <strong>{new Date(complaint.created_at).toLocaleString()}</strong>
               </li>
+              {complaint.due_date && (
+                <li>
+                  <span style={{ color: 'var(--text-muted)' }}>SLA Deadline:</span>{' '}
+                  <strong>{new Date(complaint.due_date).toLocaleString()}</strong>
+                  <div style={{ marginTop: '0.25rem' }}>
+                    {complaint.status === 'Resolved' || complaint.status === 'Closed' ? (
+                      <span className="badge badge-success" style={{ fontSize: '0.75rem' }}>SATISFIED</span>
+                    ) : new Date(complaint.due_date) < new Date() ? (
+                      <span className="badge badge-danger" style={{ fontSize: '0.75rem' }}>OVERDUE</span>
+                    ) : (
+                      <span className="badge badge-warning" style={{ fontSize: '0.75rem' }}>
+                        Due in {Math.ceil((new Date(complaint.due_date) - new Date()) / (1000 * 60 * 60))} hours
+                      </span>
+                    )}
+                  </div>
+                </li>
+              )}
             </ul>
           </div>
 

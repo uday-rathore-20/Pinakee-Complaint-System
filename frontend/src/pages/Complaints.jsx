@@ -18,6 +18,7 @@ const Complaints = () => {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterPriority, setFilterPriority] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
+  const [filterOverdue, setFilterOverdue] = useState('');
   const [search, setSearch] = useState('');
   
   // Pagination States
@@ -66,6 +67,7 @@ const Complaints = () => {
       if (filterStatus) params.push(`status=${filterStatus}`);
       if (filterPriority) params.push(`priority=${filterPriority}`);
       if (filterCategory) params.push(`category=${filterCategory}`);
+      if (filterOverdue) params.push(`overdue=${filterOverdue}`);
       if (search.trim()) params.push(`search=${encodeURIComponent(search.trim())}`);
       params.push(`limit=${limit}`);
       params.push(`offset=${currentOffset}`);
@@ -152,7 +154,7 @@ const Complaints = () => {
   useEffect(() => {
     setOffset(0);
     fetchComplaints(0);
-  }, [filterStatus, filterPriority, filterCategory, activeQueue]);
+  }, [filterStatus, filterPriority, filterCategory, filterOverdue, activeQueue]);
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
@@ -298,6 +300,19 @@ const Complaints = () => {
                 {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
               </select>
             </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>SLA Escalation</span>
+              <select
+                className="form-input"
+                style={{ padding: '0.4rem 0.8rem' }}
+                value={filterOverdue}
+                onChange={(e) => setFilterOverdue(e.target.value)}
+              >
+                <option value="">All Tickets</option>
+                <option value="true">Overdue / Breached</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -317,6 +332,7 @@ const Complaints = () => {
                   <th>Category</th>
                   <th>Priority</th>
                   <th>Status</th>
+                  <th>SLA Status</th>
                   <th>Date Filed</th>
                   {activeQueue === 'unassigned' && user && user.role === 'AGENT' && <th>Action</th>}
                 </tr>
@@ -342,6 +358,21 @@ const Complaints = () => {
                       </td>
                       <td>
                         <span className={`badge badge-${statusKey}`}>{ticket.status}</span>
+                      </td>
+                      <td>
+                        {ticket.due_date ? (
+                          ticket.status === 'Resolved' || ticket.status === 'Closed' ? (
+                            <span style={{ color: 'var(--success-color)', fontSize: '0.85rem', fontWeight: '500' }}>Satisfied</span>
+                          ) : new Date(ticket.due_date) < new Date() ? (
+                            <span className="badge badge-danger" style={{ fontSize: '0.75rem' }}>OVERDUE</span>
+                          ) : (
+                            <span className="badge badge-warning" style={{ fontSize: '0.75rem' }}>
+                              {Math.ceil((new Date(ticket.due_date) - new Date()) / (1000 * 60 * 60))}h left
+                            </span>
+                          )
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>None</span>
+                        )}
                       </td>
                       <td>{dateStr}</td>
                       {activeQueue === 'unassigned' && user && user.role === 'AGENT' && (

@@ -166,6 +166,10 @@ app.use((err, req, res, next) => {
 // Start Server
 const server = app.listen(PORT, () => {
   logger.info(`Server is running on port ${PORT}`);
+
+  // Start background SLA breach monitoring scheduler (checks every 60s)
+  const { startSlaScheduler } = require('./utils/slaScheduler');
+  startSlaScheduler(60000);
 });
 
 // Graceful shutdown handling

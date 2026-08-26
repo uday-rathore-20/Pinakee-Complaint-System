@@ -40,7 +40,7 @@ const verifyComplaintAccess = (user, complaint) => {
  * GET /api/complaints
  */
 const getComplaints = async (req, res) => {
-  const { status, priority, category, department, search, limit, offset } = req.query;
+  const { status, priority, category, department, search, limit, offset, overdue } = req.query;
   const user = req.user;
 
   try {
@@ -55,7 +55,7 @@ const getComplaints = async (req, res) => {
     const finalOffset = isNaN(parsedOffset) || parsedOffset < 0 ? 0 : parsedOffset;
 
     let query = `
-      SELECT c.id, c.ticket_number, c.title, c.description, c.created_at, c.updated_at,
+      SELECT c.id, c.ticket_number, c.title, c.description, c.created_at, c.updated_at, c.due_date, c.is_sla_breached,
              u_creator.id AS creator_id, u_creator.first_name AS creator_first_name, u_creator.last_name AS creator_last_name, u_creator.email AS creator_email,
              cc.name AS category, cs.name AS status, cp.name AS priority,
              dept.name AS department, dept.id AS department_id,
@@ -128,6 +128,11 @@ const getComplaints = async (req, res) => {
     if (category) {
       queryParams.push(category.trim());
       whereClauses.push(`LOWER(cc.name) = LOWER($${queryParams.length})`);
+    }
+
+    // Map overdue filter
+    if (overdue === 'true') {
+      whereClauses.push(`(c.is_sla_breached = TRUE OR (c.due_date < CURRENT_TIMESTAMP AND cs.name NOT IN ('Resolved', 'Closed')))`);
     }
 
     // Map department filter
@@ -309,10 +314,13 @@ const createComplaint = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid category_id' });
     }
 
-    const priCheck = await dbPool.query('SELECT id FROM complaint_priorities WHERE id = $1', [priority_id]);
+    const priCheck = await dbPool.query('SELECT id, sla_hours FROM complaint_priorities WHERE id = $1', [priority_id]);
     if (priCheck.rows.length === 0) {
       return res.status(400).json({ success: false, message: 'Invalid priority_id' });
     }
+    const slaHours = priCheck.rows[0].sla_hours;
+    const dueDate = new Date();
+    dueDate.setHours(dueDate.getHours() + slaHours);
 
     // Get Pending status ID
     const pendingStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Pending'");
@@ -326,8 +334,8 @@ const createComplaint = async (req, res) => {
 
     // Insert
     const insertQuery = `
-      INSERT INTO complaints (ticket_number, title, description, created_by_id, category_id, status_id, priority_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO complaints (ticket_number, title, description, created_by_id, category_id, status_id, priority_id, due_date)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
     `;
     const result = await dbPool.query(insertQuery, [
@@ -337,7 +345,8 @@ const createComplaint = async (req, res) => {
       targetCreatorId,
       category_id,
       statusId,
-      priority_id
+      priority_id,
+      dueDate
     ]);
 
     // Log the initial "Pending" history entry
@@ -429,12 +438,19 @@ const updateComplaint = async (req, res) => {
     }
 
     if (priority_id) {
-      const priCheck = await dbPool.query('SELECT id FROM complaint_priorities WHERE id = $1', [priority_id]);
+      const priCheck = await dbPool.query('SELECT id, sla_hours FROM complaint_priorities WHERE id = $1', [priority_id]);
       if (priCheck.rows.length === 0) {
         return res.status(400).json({ success: false, message: 'Invalid priority_id' });
       }
+      const slaHours = priCheck.rows[0].sla_hours;
+      const newDueDate = new Date(complaint.created_at);
+      newDueDate.setHours(newDueDate.getHours() + slaHours);
+
       values.push(priority_id);
       updateFields.push(`priority_id = $${values.length}`);
+
+      values.push(newDueDate);
+      updateFields.push(`due_date = $${values.length}`);
     }
 
     if (updateFields.length === 0) {

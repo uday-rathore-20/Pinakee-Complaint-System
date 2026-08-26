@@ -229,6 +229,86 @@ PINakee Support Team`;
       console.error('Failed to notify FCR finalized:', err.message);
     }
   }
+
+  /**
+   * Dispatch SLA breach notification.
+   */
+  async sendSlaBreachedEmail(complaint, recipient) {
+    if (!recipient || !recipient.email) return;
+
+    const subject = `[PINakee] [URGENT] SLA BREACHED: Ticket #${complaint.ticket_number}`;
+    const body = `Dear ${recipient.first_name} ${recipient.last_name},
+
+A complaint ticket has breached its Service Level Agreement (SLA) resolution window.
+
+Ticket Reference: #${complaint.ticket_number}
+Title:            ${complaint.title}
+Due Date:         ${complaint.due_date}
+
+Please check the system immediately to investigate the delay.
+
+Best regards,
+PINakee SLA Escalation Monitor`;
+
+    this.logEmail(recipient.email, subject, body);
+  }
+
+  /**
+   * Notify department heads or admins when an SLA is breached.
+   */
+  async notifySlaBreached(complaint, deptId) {
+    const dbPool = require('../config/db');
+    if (!dbPool) return;
+    try {
+      const receivers = [];
+      // 1. Get Dept Head for the department
+      if (deptId) {
+        const headRes = await dbPool.query(
+          'SELECT u.id, u.first_name, u.last_name, u.email FROM users u' +
+          ' JOIN roles r ON u.role_id = r.id' +
+          ' WHERE r.name = \'DEPT_HEAD\' AND u.department_id = $1 AND u.is_active = true',
+          [deptId]
+        );
+        receivers.push(...headRes.rows);
+      }
+
+      // 2. If no department or no dept head, notify admins
+      if (receivers.length === 0) {
+        const adminRes = await dbPool.query(
+          'SELECT u.id, u.first_name, u.last_name, u.email FROM users u' +
+          ' JOIN roles r ON u.role_id = r.id' +
+          ' WHERE r.name = \'ADMIN\' AND u.is_active = true'
+        );
+        receivers.push(...adminRes.rows);
+      }
+
+      // De-duplicate receivers by user id
+      const uniqueReceivers = [];
+      const seenIds = new Set();
+      for (const r of receivers) {
+        if (!seenIds.has(r.id)) {
+          seenIds.add(r.id);
+          uniqueReceivers.push(r);
+        }
+      }
+
+      for (const receiver of uniqueReceivers) {
+        // Create in-app notification
+        await this.createNotification(
+          receiver.id,
+          complaint.id,
+          'SLA_BREACHED',
+          'SLA Deadline Breached',
+          `Complaint #${complaint.ticket_number} ("${complaint.title}") has breached its SLA deadline.`
+        );
+
+        // Send email outbox log
+        await this.sendSlaBreachedEmail(complaint, receiver);
+      }
+    } catch (err) {
+      console.error('Failed to notify SLA breached:', err.message);
+    }
+  }
 }
 
 module.exports = new NotificationService();

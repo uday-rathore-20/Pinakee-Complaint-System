@@ -477,6 +477,77 @@ const changeUserPassword = async (req, res) => {
   }
 };
 
+/**
+ * Export all users as a CSV file.
+ * GET /api/users/export
+ */
+const exportUsers = async (req, res) => {
+  const user = req.user;
+
+  // Double check ADMIN role authorization
+  if (user.role !== 'ADMIN') {
+    const logger = require('../utils/logger');
+    logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { action: 'export_users_csv' }, user);
+    return res.status(403).json({ success: false, message: 'Forbidden: Admin access only' });
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    const query = `
+      SELECT u.first_name, u.last_name, u.email, u.is_active,
+             r.name AS role, d.name AS department, u.created_at
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+      LEFT JOIN departments d ON u.department_id = d.id
+      ORDER BY u.created_at DESC
+    `;
+
+    const result = await dbPool.query(query);
+    const logger = require('../utils/logger');
+    logger.audit('USERS_EXPORTED_CSV', { recordCount: result.rows.length }, user);
+
+    const escapeCSV = (val) => {
+      if (val === null || val === undefined) return '';
+      let stringVal = String(val);
+      if (stringVal.startsWith('=') || stringVal.startsWith('+') || stringVal.startsWith('-') || stringVal.startsWith('@')) {
+        stringVal = `'${stringVal}`;
+      }
+      if (stringVal.includes(',') || stringVal.includes('"') || stringVal.includes('\n') || stringVal.includes('\r')) {
+        return `"${stringVal.replace(/"/g, '""')}"`;
+      }
+      return stringVal;
+    };
+
+    const headers = ['First Name', 'Last Name', 'Email', 'Role', 'Department', 'Active Status', 'Date Created'];
+    const csvRows = [headers.join(',')];
+
+    for (const row of result.rows) {
+      const csvRow = [
+        escapeCSV(row.first_name),
+        escapeCSV(row.last_name),
+        escapeCSV(row.email),
+        escapeCSV(row.role),
+        escapeCSV(row.department || 'None'),
+        escapeCSV(row.is_active ? 'Active' : 'Inactive'),
+        escapeCSV(new Date(row.created_at).toISOString())
+      ];
+      csvRows.push(csvRow.join(','));
+    }
+
+    const csvContent = csvRows.join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="users_export_${Date.now()}.csv"`);
+    return res.status(200).send(csvContent);
+  } catch (error) {
+    console.error('Export users error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to export users list' });
+  }
+};
+
 module.exports = {
   getUsers,
   getUserById,
@@ -485,4 +556,5 @@ module.exports = {
   updateUserStatus,
   updateUserProfile,
   changeUserPassword,
+  exportUsers,
 };

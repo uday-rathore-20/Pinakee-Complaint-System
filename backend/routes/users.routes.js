@@ -8,6 +8,7 @@ const {
   updateUserStatus,
   updateUserProfile,
   changeUserPassword,
+  exportUsers,
 } = require('../controllers/users.controller');
 const { authenticateJWT, requireRole } = require('../middleware/auth');
 
@@ -16,6 +17,9 @@ router.put('/profile', authenticateJWT, updateUserProfile);
 
 // PUT /api/users/profile/password -> Update logged-in user password securely (requires authentication)
 router.put('/profile/password', authenticateJWT, changeUserPassword);
+
+// GET /api/users/export -> Export users as CSV (restricted to ADMIN)
+router.get('/export', authenticateJWT, requireRole('ADMIN'), exportUsers);
 
 // GET /api/users -> List all users (restricted to ADMIN and DEPT_HEAD)
 router.get('/', authenticateJWT, requireRole('ADMIN', 'DEPT_HEAD'), getUsers);

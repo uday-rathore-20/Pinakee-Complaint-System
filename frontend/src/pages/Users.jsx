@@ -177,17 +177,43 @@ const Users = () => {
     }
   };
 
+  const handleExportUsersCSV = async () => {
+    setError('');
+    try {
+      const res = await authFetch('/users/export');
+      if (!res.ok) {
+        throw new Error('Failed to export Users CSV');
+      }
+      const blob = await res.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', `users_export_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setError(err.message || 'Error occurred exporting users logs.');
+    }
+  };
+
   if (loading) {
     return <div className="page-container"><h2>Loading User Accounts...</h2></div>;
   }
 
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <h1>User Administration Panel</h1>
-        <button className="btn btn-primary" onClick={handleOpenCreateModal}>
-          Create User Account
-        </button>
+        <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <button className="btn btn-secondary" onClick={handleExportUsersCSV}>
+            Export Users CSV
+          </button>
+          <button className="btn btn-primary" onClick={handleOpenCreateModal}>
+            Create User Account
+          </button>
+        </div>
       </div>
 
       {error && <div className="alert alert-danger">{error}</div>}

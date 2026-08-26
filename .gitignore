@@ -39,3 +39,6 @@ Thumbs.db
 
 # Runtime logs
 backend/logs/
+
+# Temporary scratch directories
+backend/scratch/

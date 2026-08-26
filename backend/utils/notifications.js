@@ -14,6 +14,20 @@ class NotificationService {
     console.log('Body:');
     console.log(body);
     console.log('-------------------------------------------------------------\n');
+
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const logDir = path.join(__dirname, '../logs');
+      if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+      }
+      const logPath = path.join(logDir, 'email_simulator.log');
+      const logEntry = `[${new Date().toISOString()}] To: ${to}\nSubject: ${subject}\nBody:\n${body}\n==================================================\n\n`;
+      fs.appendFileSync(logPath, logEntry);
+    } catch (err) {
+      console.error('Failed to write email simulator log:', err.message);
+    }
   }
 
   /**

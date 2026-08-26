@@ -131,6 +131,15 @@ const getDashboardStats = async (req, res) => {
       statsData['by_department'] = by_department;
     }
 
+    // 6. Unassigned department tickets count (Agent and Dept Head only)
+    if ((user.role === 'AGENT' || user.role === 'DEPT_HEAD') && user.department_id) {
+      const unassignedRes = await dbPool.query(
+        'SELECT COUNT(*)::int AS count FROM complaints WHERE department_id = $1 AND assigned_to_id IS NULL',
+        [user.department_id]
+      );
+      statsData['unassigned_department_tickets'] = unassignedRes.rows[0]?.count || 0;
+    }
+
     return res.status(200).json({
       success: true,
       data: statsData

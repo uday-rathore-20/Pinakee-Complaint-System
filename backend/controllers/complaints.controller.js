@@ -74,6 +74,8 @@ const getComplaints = async (req, res) => {
     const queryParams = [];
 
     // 1. Enforce role-based boundaries
+    const { queue } = req.query;
+
     if (user.role === 'DEPT_HEAD') {
       if (!user.department_id) {
         return res.status(200).json({
@@ -85,9 +87,26 @@ const getComplaints = async (req, res) => {
       }
       queryParams.push(user.department_id);
       whereClauses.push(`c.department_id = $${queryParams.length}`);
+      if (queue === 'unassigned') {
+        whereClauses.push(`c.assigned_to_id IS NULL`);
+      }
     } else if (user.role === 'AGENT') {
-      queryParams.push(user.id);
-      whereClauses.push(`c.assigned_to_id = $${queryParams.length}`);
+      if (!user.department_id) {
+        return res.status(200).json({
+          success: true,
+          pagination: { total: 0, limit: finalLimit, offset: finalOffset },
+          count: 0,
+          data: []
+        });
+      }
+      if (queue === 'unassigned') {
+        queryParams.push(user.department_id);
+        whereClauses.push(`c.department_id = $${queryParams.length}`);
+        whereClauses.push(`c.assigned_to_id IS NULL`);
+      } else {
+        queryParams.push(user.id);
+        whereClauses.push(`c.assigned_to_id = $${queryParams.length}`);
+      }
     } else if (user.role === 'CUSTOMER') {
       queryParams.push(user.id);
       whereClauses.push(`c.created_by_id = $${queryParams.length}`);
@@ -572,6 +591,95 @@ const assignComplaint = async (req, res) => {
 };
 
 /**
+ * Claim an unassigned complaint in the agent's department (Self-assignment).
+ * PATCH /api/complaints/:id/claim
+ */
+const claimComplaint = async (req, res) => {
+  const { id } = req.params;
+  const user = req.user;
+
+  // Enforce role authorization: AGENT or DEPT_HEAD
+  if (user.role !== 'AGENT' && user.role !== 'DEPT_HEAD') {
+    return res.status(403).json({ success: false, message: 'Forbidden: Only Agents and Department Heads can claim complaints' });
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    // Fetch complaint joining priorities
+    const compCheck = await dbPool.query(`
+      SELECT c.*, cp.name AS priority
+      FROM complaints c
+      LEFT JOIN complaint_priorities cp ON c.priority_id = cp.id
+      WHERE c.id = $1
+    `, [id]);
+
+    if (compCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
+
+    const complaint = compCheck.rows[0];
+
+    // Verify user belongs to a department
+    if (!user.department_id) {
+      return res.status(400).json({ success: false, message: 'Your account is not assigned to any department. Cannot claim tickets.' });
+    }
+
+    // Verify complaint belongs to user's department
+    if (complaint.department_id !== user.department_id) {
+      return res.status(403).json({ success: false, message: 'Forbidden: You can only claim tickets assigned to your department' });
+    }
+
+    // Verify complaint is currently unassigned
+    if (complaint.assigned_to_id !== null) {
+      return res.status(400).json({ success: false, message: 'This ticket has already been assigned to another agent' });
+    }
+
+    // Fetch Assigned status id
+    const assignedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Assigned'");
+    const assignedStatusId = assignedStatusResult.rows[0]?.id;
+
+    // Transition from Pending to Assigned if status is Pending
+    const pendingStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Pending'");
+    const pendingStatusId = pendingStatusResult.rows[0]?.id;
+
+    let targetStatusId = complaint.status_id;
+    if (complaint.status_id === pendingStatusId && assignedStatusId) {
+      targetStatusId = assignedStatusId;
+    }
+
+    // Update complaint
+    const updateResult = await dbPool.query(`
+      UPDATE complaints
+      SET assigned_to_id = $1, status_id = $2
+      WHERE id = $3
+      RETURNING *
+    `, [user.id, targetStatusId, id]);
+
+    // Log history
+    const auditRemark = 'Ticket claimed by agent';
+    await dbPool.query(`
+      INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [id, user.id, complaint.status_id, targetStatusId, auditRemark]);
+
+    logger.audit('COMPLAINT_CLAIMED', { complaintId: id, ticketNumber: updateResult.rows[0].ticket_number }, user);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Ticket claimed successfully',
+      data: updateResult.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Claim complaint error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to claim complaint' });
+  }
+};
+
+/**
  * Update complaint status (manually transition status).
  * PATCH /api/complaints/:id/status
  */
@@ -840,6 +948,7 @@ module.exports = {
   createComplaint,
   updateComplaint,
   assignComplaint,
+  claimComplaint,
   updateComplaintStatus,
   addComment,
   exportComplaints,

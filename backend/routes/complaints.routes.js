@@ -6,6 +6,7 @@ const {
   createComplaint,
   updateComplaint,
   assignComplaint,
+  claimComplaint,
   updateComplaintStatus,
   addComment,
   exportComplaints,
@@ -19,6 +20,7 @@ router.get('/:id', authenticateJWT, getComplaintById);
 router.post('/', authenticateJWT, createComplaint);
 router.put('/:id', authenticateJWT, updateComplaint);
 router.patch('/:id/assign', authenticateJWT, assignComplaint);
+router.patch('/:id/claim', authenticateJWT, claimComplaint);
 router.patch('/:id/status', authenticateJWT, updateComplaintStatus);
 router.post('/:id/comments', authenticateJWT, addComment);
 

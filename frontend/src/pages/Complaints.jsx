@@ -11,6 +11,9 @@ const Complaints = () => {
   const [priorities, setPriorities] = useState([]);
   const [statuses, setStatuses] = useState([]);
   
+  // Active queue for AGENT (defaults to 'my')
+  const [activeQueue, setActiveQueue] = useState('my');
+
   // Filter & Search States
   const [filterStatus, setFilterStatus] = useState('');
   const [filterPriority, setFilterPriority] = useState('');
@@ -66,7 +69,11 @@ const Complaints = () => {
       if (search.trim()) params.push(`search=${encodeURIComponent(search.trim())}`);
       params.push(`limit=${limit}`);
       params.push(`offset=${currentOffset}`);
-      
+
+      if (user.role === 'AGENT') {
+        params.push(`queue=${activeQueue}`);
+      }
+
       const queryString = params.length > 0 ? `?${params.join('&')}` : '';
       const res = await authFetch(`/complaints${queryString}`);
       const result = await res.json();
@@ -76,6 +83,26 @@ const Complaints = () => {
       }
     } catch (err) {
       setError('Failed to reload complaints list.');
+    }
+  };
+
+  const handleClaimTicket = async (ticketId) => {
+    setError('');
+    try {
+      const res = await authFetch(`/complaints/${ticketId}/claim`, {
+        method: 'PATCH'
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        // Switch tab to "My Tickets" and reload
+        setActiveQueue('my');
+        setOffset(0);
+        await fetchComplaints(0);
+      } else {
+        setError(result.message || 'Failed to claim ticket.');
+      }
+    } catch (err) {
+      setError('Connection failure claiming ticket.');
     }
   };
 
@@ -125,7 +152,7 @@ const Complaints = () => {
   useEffect(() => {
     setOffset(0);
     fetchComplaints(0);
-  }, [filterStatus, filterPriority, filterCategory]);
+  }, [filterStatus, filterPriority, filterCategory, activeQueue]);
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
@@ -190,6 +217,26 @@ const Complaints = () => {
       </div>
 
       {error && <div className="alert alert-danger">{error}</div>}
+
+      {/* Queue selector tabs for AGENT */}
+      {user && user.role === 'AGENT' && (
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
+          <button
+            className={`btn ${activeQueue === 'my' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ padding: '0.4rem 1.2rem', fontSize: '0.875rem' }}
+            onClick={() => setActiveQueue('my')}
+          >
+            My Assigned Tickets
+          </button>
+          <button
+            className={`btn ${activeQueue === 'unassigned' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ padding: '0.4rem 1.2rem', fontSize: '0.875rem' }}
+            onClick={() => setActiveQueue('unassigned')}
+          >
+            Unassigned Department Tickets
+          </button>
+        </div>
+      )}
 
       {/* Filters Bar */}
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
@@ -271,6 +318,7 @@ const Complaints = () => {
                   <th>Priority</th>
                   <th>Status</th>
                   <th>Date Filed</th>
+                  {activeQueue === 'unassigned' && user && user.role === 'AGENT' && <th>Action</th>}
                 </tr>
               </thead>
               <tbody>
@@ -296,6 +344,17 @@ const Complaints = () => {
                         <span className={`badge badge-${statusKey}`}>{ticket.status}</span>
                       </td>
                       <td>{dateStr}</td>
+                      {activeQueue === 'unassigned' && user && user.role === 'AGENT' && (
+                        <td>
+                          <button
+                            className="btn btn-secondary"
+                            style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
+                            onClick={() => handleClaimTicket(ticket.id)}
+                          >
+                            Claim
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

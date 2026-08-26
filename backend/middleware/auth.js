@@ -35,7 +35,7 @@ const authenticateJWT = async (req, res, next) => {
 
     // Fetch full, fresh user details from database
     const query = `
-      SELECT u.id, u.first_name, u.last_name, u.email, u.is_active, 
+      SELECT u.id, u.first_name, u.last_name, u.email, u.is_active, u.department_id,
              r.name AS role, d.name AS department
       FROM users u
       JOIN roles r ON u.role_id = r.id

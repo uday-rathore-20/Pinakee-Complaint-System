@@ -31,6 +31,7 @@ const ComplaintDetail = () => {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [updatingAssign, setUpdatingAssign] = useState(false);
+  const [claimingTicket, setClaimingTicket] = useState(false);
   
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
@@ -245,6 +246,26 @@ const ComplaintDetail = () => {
     }
   };
 
+  const handleClaimTicketDetails = async () => {
+    setActionError('');
+    setClaimingTicket(true);
+    try {
+      const res = await authFetch(`/complaints/${id}/claim`, {
+        method: 'PATCH'
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        await fetchComplaintDetails(); // Refresh ticket metadata and history
+      } else {
+        setActionError(result.message || 'Failed to claim ticket.');
+      }
+    } catch (err) {
+      setActionError('Network error claiming ticket.');
+    } finally {
+      setClaimingTicket(false);
+    }
+  };
+
   if (loading) {
     return <div className="page-container"><h2>Loading ticket details...</h2></div>;
   }
@@ -440,6 +461,24 @@ const ComplaintDetail = () => {
               </li>
             </ul>
           </div>
+
+          {/* Claim Ticket Widget for Agents in the same department */}
+          {user && (user.role === 'AGENT' || user.role === 'DEPT_HEAD') && !complaint.assigned_to_id && complaint.department_id === user.department_id && (
+            <div className="card" style={{ background: '#f8fafc', border: '1px dashed var(--primary-color)' }}>
+              <h3 style={{ marginBottom: '0.5rem', fontSize: '0.95rem', color: 'var(--primary-color)' }}>Ticket is Unassigned</h3>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                This complaint is routed to your department. Claim it to take ownership and start resolving.
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary btn-block"
+                onClick={handleClaimTicketDetails}
+                disabled={claimingTicket}
+              >
+                {claimingTicket ? 'Claiming...' : 'Claim Ticket'}
+              </button>
+            </div>
+          )}
 
           {/* Status update widget */}
           <div className="card">

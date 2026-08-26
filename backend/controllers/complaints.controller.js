@@ -729,13 +729,48 @@ const updateComplaintStatus = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Forbidden: Insufficient privileges to update status' });
     }
 
-    // Customers can only close resolved complaints
+    const current = complaint.current_status_name;
+    const target = targetStatus.name;
+
+    // Terminal state protection: Closed complaints cannot be transitioned
+    if (current === 'Closed') {
+      return res.status(400).json({ success: false, message: 'Closed tickets cannot be modified' });
+    }
+
+    // Role-specific transition matrix
     if (user.role === 'CUSTOMER') {
-      if (targetStatus.name !== 'Closed') {
+      if (target !== 'Closed') {
         return res.status(403).json({ success: false, message: 'Customers are only permitted to transition tickets to Closed' });
       }
-      if (complaint.current_status_name !== 'Resolved') {
+      if (current !== 'Resolved') {
         return res.status(400).json({ success: false, message: 'Tickets can only be closed by customers once they are marked as Resolved' });
+      }
+    } else if (user.role === 'AGENT') {
+      if (complaint.assigned_to_id !== user.id) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You can only update the status of tickets assigned to you' });
+      }
+      if (target !== 'In Progress') {
+        return res.status(400).json({ success: false, message: 'Agents can only transition tickets to In Progress. Resolved status must be achieved via FCR submission.' });
+      }
+      if (current !== 'Assigned') {
+        return res.status(400).json({ success: false, message: 'Tickets can only be moved to In Progress from Assigned status' });
+      }
+    } else {
+      // ADMIN or DEPT_HEAD manual transitions
+      if (target === 'Resolved') {
+        return res.status(400).json({ success: false, message: 'Manual transition to Resolved is blocked. Tickets must be resolved via FCR submission.' });
+      }
+      if (target === 'In Progress' && current !== 'Assigned') {
+        return res.status(400).json({ success: false, message: 'Tickets can only be moved to In Progress from Assigned status' });
+      }
+      if (target === 'Closed' && current !== 'Resolved') {
+        return res.status(400).json({ success: false, message: 'Tickets can only be closed from Resolved status' });
+      }
+      if (target === 'Pending') {
+        return res.status(400).json({ success: false, message: 'Cannot transition ticket back to Pending status' });
+      }
+      if (target === 'Assigned') {
+        return res.status(400).json({ success: false, message: 'Assigned status is automatically handled via assignment routing' });
       }
     }
 

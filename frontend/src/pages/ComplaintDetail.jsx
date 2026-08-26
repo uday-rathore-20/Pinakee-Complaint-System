@@ -283,6 +283,33 @@ const ComplaintDetail = () => {
     init();
   }, [id]);
 
+  useEffect(() => {
+    if (complaint && statuses.length) {
+      const allowed = [];
+      const current = complaint.status;
+      if (current !== 'Closed') {
+        if (user.role === 'CUSTOMER') {
+          if (current === 'Resolved') {
+            allowed.push(...statuses.filter(s => s.name === 'Closed'));
+          }
+        } else if (user.role === 'AGENT') {
+          if (complaint.assigned_to_id === user.id && current === 'Assigned') {
+            allowed.push(...statuses.filter(s => s.name === 'In Progress'));
+          }
+        } else if (user.role === 'ADMIN' || (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id)) {
+          if (current === 'Assigned') {
+            allowed.push(...statuses.filter(s => s.name === 'In Progress'));
+          } else if (current === 'Resolved') {
+            allowed.push(...statuses.filter(s => s.name === 'Closed'));
+          }
+        }
+      }
+      if (allowed.length > 0) {
+        setSelectedStatus(allowed[0].id);
+      }
+    }
+  }, [complaint, statuses, user]);
+
   const handleUploadFile = async (e) => {
     e.preventDefault();
     if (!selectedFile) return;
@@ -483,6 +510,28 @@ const ComplaintDetail = () => {
   const statusKey = complaint.status.toLowerCase().replace(/ /g, '-');
   const isStaff = user.role !== 'CUSTOMER';
   const isAdminOrHead = user.role === 'ADMIN' || (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id);
+
+  const allowedOptions = [];
+  if (complaint && statuses.length) {
+    const current = complaint.status;
+    if (current !== 'Closed') {
+      if (user.role === 'CUSTOMER') {
+        if (current === 'Resolved') {
+          allowedOptions.push(...statuses.filter(s => s.name === 'Closed'));
+        }
+      } else if (user.role === 'AGENT') {
+        if (complaint.assigned_to_id === user.id && current === 'Assigned') {
+          allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
+        }
+      } else if (user.role === 'ADMIN' || (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id)) {
+        if (current === 'Assigned') {
+          allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
+        } else if (current === 'Resolved') {
+          allowedOptions.push(...statuses.filter(s => s.name === 'Closed'));
+        }
+      }
+    }
+  }
 
   return (
     <div className="page-container">
@@ -955,43 +1004,41 @@ const ComplaintDetail = () => {
           )}
 
           {/* Status update widget */}
-          <div className="card">
-            <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem' }}>
-              Transition Status
-            </h3>
-            <form onSubmit={handleUpdateStatus}>
-              <div className="form-group">
-                <select
-                  className="form-input"
-                  value={selectedStatus}
-                  onChange={(e) => setSelectedStatus(e.target.value)}
-                  required
-                >
-                  {statuses.map(s => {
-                    // Restrict options: customers can only close tickets when resolved
-                    if (user.role === 'CUSTOMER' && s.name !== 'Closed') {
-                      return null;
-                    }
-                    return <option key={s.id} value={s.id}>{s.name}</option>;
-                  })}
-                </select>
-              </div>
+          {allowedOptions.length > 0 && (
+            <div className="card">
+              <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem' }}>
+                Transition Status
+              </h3>
+              <form onSubmit={handleUpdateStatus}>
+                <div className="form-group">
+                  <select
+                    className="form-input"
+                    value={selectedStatus}
+                    onChange={(e) => setSelectedStatus(e.target.value)}
+                    required
+                  >
+                    {allowedOptions.map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
 
-              <div className="form-group">
-                <input
-                  type="text"
-                  className="form-input"
-                  value={transitionRemarks}
-                  onChange={(e) => setTransitionRemarks(e.target.value)}
-                  placeholder="Update remark log..."
-                />
-              </div>
+                <div className="form-group">
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={transitionRemarks}
+                    onChange={(e) => setTransitionRemarks(e.target.value)}
+                    placeholder="Update remark log..."
+                  />
+                </div>
 
-              <button type="submit" className="btn btn-secondary btn-block" disabled={updatingStatus}>
-                {updatingStatus ? 'Updating...' : 'Update Status'}
-              </button>
-            </form>
-          </div>
+                <button type="submit" className="btn btn-secondary btn-block" disabled={updatingStatus}>
+                  {updatingStatus ? 'Updating...' : 'Update Status'}
+                </button>
+              </form>
+            </div>
+          )}
 
           {/* Assignment Routing widget (Admin/Head only) */}
           {isAdminOrHead && (

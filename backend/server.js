@@ -74,6 +74,7 @@ const authRoutes = require('./routes/auth.routes');
 const usersRoutes = require('./routes/users.routes');
 const lookupsRoutes = require('./routes/lookups.routes');
 const complaintsRoutes = require('./routes/complaints.routes');
+const fcrRoutes = require('./routes/fcr.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const attachmentsRoutes = require('./routes/attachments.routes');
 
@@ -81,6 +82,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api', lookupsRoutes);
 app.use('/api/complaints', complaintsRoutes);
+app.use('/api/complaints', fcrRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api', attachmentsRoutes);
 

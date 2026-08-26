@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 const ComplaintDetail = () => {
   const { id } = useParams();
   const { user, authFetch } = useAuth();
-  
+
   // Data States
   const [complaint, setComplaint] = useState(null);
   const [comments, setComments] = useState([]);
@@ -13,7 +13,7 @@ const ComplaintDetail = () => {
   const [attachments, setAttachments] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
-  
+
   // Lookup collections for controls
   const [statuses, setStatuses] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -32,7 +32,20 @@ const ComplaintDetail = () => {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [updatingAssign, setUpdatingAssign] = useState(false);
   const [claimingTicket, setClaimingTicket] = useState(false);
-  
+  const [fcr, setFcr] = useState(null);
+  const [fcrLoading, setFcrLoading] = useState(true);
+  const [fcrVisitDate, setFcrVisitDate] = useState('');
+  const [fcrStartTime, setFcrStartTime] = useState('');
+  const [fcrEndTime, setFcrEndTime] = useState('');
+  const [fcrDiagnosis, setFcrDiagnosis] = useState('');
+  const [fcrActionTaken, setFcrActionTaken] = useState('');
+  const [fcrPartsReplaced, setFcrPartsReplaced] = useState('');
+  const [fcrActivityCode, setFcrActivityCode] = useState('ACT-01');
+  const [fcrSuggestions, setFcrSuggestions] = useState('');
+  const [fcrFeedback, setFcrFeedback] = useState('');
+  const [fcrRating, setFcrRating] = useState(5);
+  const [submittingFcrAction, setSubmittingFcrAction] = useState(false);
+
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
 
@@ -40,12 +53,12 @@ const ComplaintDetail = () => {
     try {
       const res = await authFetch(`/complaints/${id}`);
       const result = await res.json();
-      
+
       if (res.ok && result.success) {
         setComplaint(result.data.complaint);
         setComments(result.data.comments);
         setHistory(result.data.status_history);
-        
+
         setSelectedStatus(result.data.complaint.status_id);
         setSelectedDept(result.data.complaint.department_id || '');
         setSelectedAgent(result.data.complaint.assigned_to_id || '');
@@ -95,11 +108,176 @@ const ComplaintDetail = () => {
     }
   };
 
+  const fetchFcrData = async () => {
+    try {
+      const res = await authFetch(`/complaints/${id}/fcr`);
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setFcr(result.data);
+        if (result.data) {
+          setFcrVisitDate(result.data.visit_date ? result.data.visit_date.substring(0, 10) : '');
+          setFcrStartTime(result.data.visit_start_time ? result.data.visit_start_time.substring(0, 5) : '');
+          setFcrEndTime(result.data.visit_end_time ? result.data.visit_end_time.substring(0, 5) : '');
+          setFcrDiagnosis(result.data.diagnosis || '');
+          setFcrActionTaken(result.data.action_taken || '');
+          setFcrPartsReplaced(result.data.parts_replaced || '');
+          setFcrActivityCode(result.data.activity_code || 'ACT-01');
+          setFcrSuggestions(result.data.suggestions || '');
+        } else {
+          const today = new Date().toISOString().substring(0, 10);
+          setFcrVisitDate(today);
+          setFcrStartTime('09:00');
+          setFcrEndTime('10:00');
+          setFcrDiagnosis('');
+          setFcrActionTaken('');
+          setFcrPartsReplaced('');
+          setFcrActivityCode('ACT-01');
+          setFcrSuggestions('');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load FCR data:', err);
+    } finally {
+      setFcrLoading(false);
+    }
+  };
+
+  const handleSaveFcrDraft = async (e) => {
+    if (e) e.preventDefault();
+    setActionError('');
+    setSubmittingFcrAction(true);
+
+    try {
+      const method = fcr ? 'PUT' : 'POST';
+      const payload = {
+        visit_date: fcrVisitDate,
+        visit_start_time: fcrStartTime,
+        visit_end_time: fcrEndTime,
+        diagnosis: fcrDiagnosis,
+        action_taken: fcrActionTaken,
+        parts_replaced: fcrPartsReplaced,
+        activity_code: fcrActivityCode,
+        suggestions: fcrSuggestions
+      };
+
+      const res = await authFetch(`/complaints/${id}/fcr`, {
+        method,
+        body: JSON.stringify(payload)
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        await fetchFcrData();
+        return true;
+      } else {
+        setActionError(result.message || 'Failed to save FCR draft.');
+        return false;
+      }
+    } catch (err) {
+      setActionError('Network error saving FCR draft.');
+      return false;
+    } finally {
+      setSubmittingFcrAction(false);
+    }
+  };
+
+  const handleSubmitFcrAction = async (e) => {
+    e.preventDefault();
+    setActionError('');
+
+    if (!fcrVisitDate || !fcrStartTime || !fcrEndTime || !fcrDiagnosis.trim() || !fcrActionTaken.trim() || !fcrActivityCode.trim()) {
+      setActionError('Please fill in all mandatory fields before submitting FCR.');
+      return;
+    }
+
+    setSubmittingFcrAction(true);
+
+    try {
+      // First save current values as draft to ensure backend has latest fields
+      const saveSuccess = await handleSaveFcrDraft();
+      if (!saveSuccess) return;
+
+      // Call submit
+      const res = await authFetch(`/complaints/${id}/fcr/submit`, {
+        method: 'POST'
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        await Promise.all([
+          fetchFcrData(),
+          fetchComplaintDetails() // Refresh complaint status (should transition to Resolved)
+        ]);
+      } else {
+        setActionError(result.message || 'Failed to submit FCR.');
+      }
+    } catch (err) {
+      setActionError('Network error submitting FCR.');
+    } finally {
+      setSubmittingFcrAction(false);
+    }
+  };
+
+  const handleConfirmFcrAction = async (e) => {
+    e.preventDefault();
+    setActionError('');
+
+    if (fcrRating < 1 || fcrRating > 5) {
+      setActionError('Rating must be between 1 and 5 stars.');
+      return;
+    }
+
+    setSubmittingFcrAction(true);
+
+    try {
+      const res = await authFetch(`/complaints/${id}/fcr/confirm`, {
+        method: 'POST',
+        body: JSON.stringify({
+          customer_feedback: fcrFeedback,
+          customer_rating: parseInt(fcrRating)
+        })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        await Promise.all([
+          fetchFcrData(),
+          fetchComplaintDetails() // Refresh complaint status (should transition to Closed)
+        ]);
+      } else {
+        setActionError(result.message || 'Failed to confirm FCR.');
+      }
+    } catch (err) {
+      setActionError('Network error confirming FCR.');
+    } finally {
+      setSubmittingFcrAction(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setActionError('');
+    try {
+      const res = await authFetch(`/complaints/${id}/fcr/pdf`);
+      if (!res.ok) {
+        throw new Error('Failed to generate FCR PDF');
+      }
+      const blob = await res.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', `fcr_ticket_${complaint.ticket_number}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setActionError(err.message || 'Error occurred downloading FCR PDF.');
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
       await fetchComplaintDetails();
       await fetchLookups();
       await fetchAttachments();
+      await fetchFcrData();
       setLoading(false);
     };
     init();
@@ -175,7 +353,7 @@ const ComplaintDetail = () => {
         })
       });
       const result = await res.json();
-      
+
       if (res.ok && result.success) {
         setCommentText('');
         setCommentInternal(false);
@@ -204,7 +382,7 @@ const ComplaintDetail = () => {
         })
       });
       const result = await res.json();
-      
+
       if (res.ok && result.success) {
         setTransitionRemarks('');
         await fetchComplaintDetails(); // Refresh complaint status & timeline
@@ -233,7 +411,7 @@ const ComplaintDetail = () => {
         })
       });
       const result = await res.json();
-      
+
       if (res.ok && result.success) {
         await fetchComplaintDetails(); // Refresh assignment info
       } else {
@@ -320,6 +498,272 @@ const ComplaintDetail = () => {
             </p>
           </div>
 
+          {/* FCR Card */}
+          {!fcrLoading && (
+            <div className="card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
+                <h3 style={{ margin: '0' }}>Digital Field Call Report (FCR)</h3>
+                {fcr && (fcr.status === 'Submitted' || fcr.status === 'Finalized') && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                    onClick={handleDownloadPdf}
+                  >
+                    Download PDF
+                  </button>
+                )}
+              </div>
+
+              {/* CASE 1: AGENT creating/editing draft */}
+              {user.role === 'AGENT' && complaint.assigned_to_id === user.id && (!fcr || fcr.status === 'Draft') && (
+                <form onSubmit={handleSubmitFcrAction}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                    <div className="form-group" style={{ margin: '0' }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Visit Date</label>
+                      <input
+                        type="date"
+                        className="form-input"
+                        value={fcrVisitDate}
+                        onChange={(e) => setFcrVisitDate(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="form-group" style={{ margin: '0' }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Start Time</label>
+                      <input
+                        type="time"
+                        className="form-input"
+                        value={fcrStartTime}
+                        onChange={(e) => setFcrStartTime(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="form-group" style={{ margin: '0' }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>End Time</label>
+                      <input
+                        type="time"
+                        className="form-input"
+                        value={fcrEndTime}
+                        onChange={(e) => setFcrEndTime(e.target.value)}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontSize: '0.8rem' }}>Diagnosis & Findings</label>
+                    <textarea
+                      className="form-input"
+                      rows="2"
+                      value={fcrDiagnosis}
+                      onChange={(e) => setFcrDiagnosis(e.target.value)}
+                      placeholder="Detail the cause/origin of the problem..."
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontSize: '0.8rem' }}>Action Taken</label>
+                    <textarea
+                      className="form-input"
+                      rows="2"
+                      value={fcrActionTaken}
+                      onChange={(e) => setFcrActionTaken(e.target.value)}
+                      placeholder="Detail the steps performed to resolve..."
+                      required
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                    <div className="form-group" style={{ margin: '0' }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Activity Code</label>
+                      <select
+                        className="form-input"
+                        value={fcrActivityCode}
+                        onChange={(e) => setFcrActivityCode(e.target.value)}
+                        required
+                      >
+                        <option value="ACT-01">ACT-01: Diagnostics & Analysis</option>
+                        <option value="ACT-02">ACT-02: Repairs & Restorations</option>
+                        <option value="ACT-03">ACT-03: Part Replacement</option>
+                        <option value="ACT-04">ACT-04: Preventive Maintenance</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: '0' }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Parts Replaced (Optional)</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={fcrPartsReplaced}
+                        onChange={(e) => setFcrPartsReplaced(e.target.value)}
+                        placeholder="e.g. SSD, RAM, Battery"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontSize: '0.8rem' }}>Suggestions / Recommendations (Optional)</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={fcrSuggestions}
+                      onChange={(e) => setFcrSuggestions(e.target.value)}
+                      placeholder="Suggestions for preventing future occurrences..."
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.25rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={handleSaveFcrDraft}
+                      disabled={submittingFcrAction}
+                    >
+                      Save Draft
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={submittingFcrAction}
+                    >
+                      Submit FCR
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* CASE 2: Customer confirming / signing off */}
+              {user.role === 'CUSTOMER' && complaint.created_by_id === user.id && fcr && fcr.status === 'Submitted' && (
+                <form onSubmit={handleConfirmFcrAction}>
+                  <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: '6px', marginBottom: '1rem', border: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
+                    <div style={{ marginBottom: '0.5rem' }}><strong>Visit Date:</strong> {new Date(fcr.visit_date).toLocaleDateString()} ({fcr.visit_start_time} - {fcr.visit_end_time})</div>
+                    <div style={{ marginBottom: '0.5rem' }}><strong>Diagnosis:</strong> {fcr.diagnosis}</div>
+                    <div style={{ marginBottom: '0.5rem' }}><strong>Action Taken:</strong> {fcr.action_taken}</div>
+                    {fcr.parts_replaced && <div style={{ marginBottom: '0.5rem' }}><strong>Parts Replaced:</strong> {fcr.parts_replaced}</div>}
+                    <div style={{ marginBottom: '0.5rem' }}><strong>Activity Code:</strong> {fcr.activity_code}</div>
+                    {fcr.suggestions && <div><strong>Engineer Suggestions:</strong> {fcr.suggestions}</div>}
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
+                    <div className="form-group" style={{ margin: '0' }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Satisfaction</label>
+                      <select
+                        className="form-input"
+                        value={fcrRating}
+                        onChange={(e) => setFcrRating(e.target.value)}
+                        required
+                      >
+                        <option value="5">5 ★ (Excellent)</option>
+                        <option value="4">4 ★ (Good)</option>
+                        <option value="3">3 ★ (Average)</option>
+                        <option value="2">2 ★ (Poor)</option>
+                        <option value="1">1 ★ (Very Poor)</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ margin: '0' }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Feedback / Sign-off Comments</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={fcrFeedback}
+                        onChange={(e) => setFcrFeedback(e.target.value)}
+                        placeholder="Leave feedback or sign-off message..."
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={submittingFcrAction}
+                    >
+                      Confirm Resolution & Close Ticket
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* CASE 3: Read-only submitted or finalized view for Agent/Admin/Customer */}
+              {fcr && (fcr.status === 'Finalized' || (fcr.status === 'Submitted' && user.role !== 'CUSTOMER')) && (
+                <div style={{ fontSize: '0.9rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1rem' }}>
+                    <div>
+                      <div style={{ marginBottom: '0.5rem', color: 'var(--text-muted)' }}>Service Timing</div>
+                      <div style={{ fontWeight: 'bold' }}>Date: {new Date(fcr.visit_date).toLocaleDateString()}</div>
+                      <div>Time: {fcr.visit_start_time} - {fcr.visit_end_time}</div>
+                    </div>
+                    <div>
+                      <div style={{ marginBottom: '0.5rem', color: 'var(--text-muted)' }}>Service Code & Replaced Parts</div>
+                      <div style={{ fontWeight: 'bold' }}>Activity Code: {fcr.activity_code}</div>
+                      <div>Parts Replaced: {fcr.parts_replaced || 'None'}</div>
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Diagnosis</div>
+                    <div style={{ background: '#f8fafc', padding: '0.75rem', borderRadius: '4px', borderLeft: '3px solid var(--primary-color)' }}>
+                      {fcr.diagnosis}
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Action Taken</div>
+                    <div style={{ background: '#f8fafc', padding: '0.75rem', borderRadius: '4px', borderLeft: '3px solid var(--primary-color)' }}>
+                      {fcr.action_taken}
+                    </div>
+                  </div>
+
+                  {fcr.suggestions && (
+                    <div style={{ marginBottom: '1rem' }}>
+                      <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Engineer Recommendations</div>
+                      <div>{fcr.suggestions}</div>
+                    </div>
+                  )}
+
+                  {fcr.status === 'Finalized' ? (
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem', background: '#f0fdf4', padding: '0.75rem', borderRadius: '6px', border: '1px solid #bbf7d0' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', color: '#16a34a', marginBottom: '0.25rem' }}>
+                        <span>Customer Confirmation Sign-off</span>
+                        <span>Rating: {'★'.repeat(fcr.customer_rating)}</span>
+                      </div>
+                      <div>Comments: "{fcr.customer_feedback || 'No comments left'}"</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                        Confirmed on {new Date(fcr.customer_confirmed_at).toLocaleString()}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                      Awaiting customer confirmation and sign-off.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* CASE 4: Customer viewing before FCR is submitted (draft status) */}
+              {user.role === 'CUSTOMER' && (!fcr || fcr.status === 'Draft') && (
+                <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: '0' }}>
+                  The engineer has not submitted the service call report for this complaint yet.
+                </p>
+              )}
+
+              {/* CASE 5: Staff view where FCR draft is not yet created */}
+              {user.role !== 'CUSTOMER' && (user.role !== 'AGENT' || complaint.assigned_to_id !== user.id) && !fcr && (
+                <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: '0' }}>
+                  No service call report has been registered for this complaint.
+                </p>
+              )}
+
+              {/* CASE 6: Assigned Agent when FCR is submitted */}
+              {user.role === 'AGENT' && complaint.assigned_to_id === user.id && fcr && fcr.status === 'Submitted' && (
+                <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: '0', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
+                  You have submitted this FCR. It is now read-only pending customer sign-off.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Attachments Card */}
           <div className="card">
             <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
@@ -338,8 +782,8 @@ const ComplaintDetail = () => {
                         {(att.file_size / 1024).toFixed(1)} KB | Uploaded by {att.first_name} {att.last_name} ({att.role})
                       </div>
                     </div>
-                    <button 
-                      className="btn btn-secondary" 
+                    <button
+                      className="btn btn-secondary"
                       style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
                       onClick={() => handleDownloadAttachment(att.id, att.file_name)}
                     >
@@ -377,7 +821,7 @@ const ComplaintDetail = () => {
             <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
               Discussion & Comments Feed ({comments.length})
             </h3>
-            
+
             {/* Add Comment form */}
             <form onSubmit={handleAddComment} style={{ marginBottom: '1.5rem' }}>
               <div className="form-group">

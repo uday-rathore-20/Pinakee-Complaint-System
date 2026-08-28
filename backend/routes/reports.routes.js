@@ -5,7 +5,8 @@ const {
   getTicketsByPriority,
   getTicketsByDepartment,
   getTicketTrends,
-  getSlaCompliance
+  getSlaCompliance,
+  getCsatMetrics
 } = require('../controllers/reports.controller');
 const { authenticateJWT, requireRole } = require('../middleware/auth');
 
@@ -19,5 +20,6 @@ router.get('/tickets-by-priority', getTicketsByPriority);
 router.get('/tickets-by-department', getTicketsByDepartment);
 router.get('/ticket-trends', getTicketTrends);
 router.get('/sla-compliance', getSlaCompliance);
+router.get('/csat-metrics', getCsatMetrics);
 
 module.exports = router;

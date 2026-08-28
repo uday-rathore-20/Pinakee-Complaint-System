@@ -218,10 +218,104 @@ const getSlaCompliance = async (req, res) => {
   }
 };
 
+/**
+ * Retrieve CSAT ratings and feedback statistics.
+ * GET /api/reports/csat-metrics
+ */
+const getCsatMetrics = async (req, res) => {
+  const user = req.user;
+
+  let queryScopeClause = '';
+  let queryScopeParams = [];
+  if (user.role === 'DEPT_HEAD') {
+    queryScopeClause = 'WHERE c.department_id = $1';
+    queryScopeParams = [user.department_id];
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    // 1. Calculate Average Rating and total rating counts
+    const generalQuery = `
+      SELECT
+        AVG(f.rating)::float AS avg_rating,
+        COUNT(f.id)::int AS feedback_count,
+        COUNT(CASE WHEN f.rating = 5 THEN 1 END)::int AS rating_5,
+        COUNT(CASE WHEN f.rating = 4 THEN 1 END)::int AS rating_4,
+        COUNT(CASE WHEN f.rating = 3 THEN 1 END)::int AS rating_3,
+        COUNT(CASE WHEN f.rating = 2 THEN 1 END)::int AS rating_2,
+        COUNT(CASE WHEN f.rating = 1 THEN 1 END)::int AS rating_1
+      FROM complaint_feedback f
+      JOIN complaints c ON f.complaint_id = c.id
+      ${queryScopeClause}
+    `;
+    const generalResult = await dbPool.query(generalQuery, queryScopeParams);
+    const stats = generalResult.rows[0];
+
+    // 2. Fetch total closed tickets to compute feedback rate
+    const closedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Closed'");
+    const closedStatusId = closedStatusResult.rows[0]?.id || 0;
+
+    const closedQuery = `
+      SELECT COUNT(*)::int AS total_closed
+      FROM complaints c
+      WHERE c.status_id = $1
+      ${user.role === 'DEPT_HEAD' ? 'AND c.department_id = $2' : ''}
+    `;
+    const closedParams = user.role === 'DEPT_HEAD' ? [closedStatusId, user.department_id] : [closedStatusId];
+    const closedResult = await dbPool.query(closedQuery, closedParams);
+    const totalClosed = closedResult.rows[0]?.total_closed || 0;
+
+    const feedbackRate = totalClosed > 0
+      ? parseFloat(((stats.feedback_count / totalClosed) * 100).toFixed(1))
+      : 0.0;
+
+    // 3. Department-wise CSAT breakdown (only for ADMIN)
+    let deptBreakdown = [];
+    if (user.role === 'ADMIN') {
+      const deptQuery = `
+        SELECT d.name AS department, AVG(f.rating)::float AS avg_rating, COUNT(f.id)::int AS feedback_count
+        FROM complaint_feedback f
+        JOIN complaints c ON f.complaint_id = c.id
+        JOIN departments d ON c.department_id = d.id
+        GROUP BY d.name
+        ORDER BY avg_rating DESC
+      `;
+      const deptResult = await dbPool.query(deptQuery);
+      deptBreakdown = deptResult.rows;
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        avg_rating: stats.avg_rating || 0.0,
+        feedback_count: stats.feedback_count || 0,
+        total_closed: totalClosed,
+        feedback_rate: feedbackRate,
+        distribution: {
+          5: stats.rating_5 || 0,
+          4: stats.rating_4 || 0,
+          3: stats.rating_3 || 0,
+          2: stats.rating_2 || 0,
+          1: stats.rating_1 || 0
+        },
+        departments: deptBreakdown
+      }
+    });
+
+  } catch (error) {
+    console.error('Reports csat-metrics error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve CSAT metrics' });
+  }
+};
+
 module.exports = {
   getTicketsByStatus,
   getTicketsByPriority,
   getTicketsByDepartment,
   getTicketTrends,
-  getSlaCompliance
+  getSlaCompliance,
+  getCsatMetrics
 };

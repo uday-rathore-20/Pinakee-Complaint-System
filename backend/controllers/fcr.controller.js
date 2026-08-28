@@ -454,6 +454,13 @@ const confirmFcr = async (req, res) => {
     await dbPool.query(finalizeQuery, [customer_feedback || '', rating, id]);
     await dbPool.query("UPDATE complaints SET status_id = $1 WHERE id = $2", [closedStatusId, id]);
 
+    // Propagate FCR rating into centralization store (DO NOTHING on conflict to prevent overwriting manual feedback)
+    await dbPool.query(`
+      INSERT INTO complaint_feedback (complaint_id, rating, comments)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (complaint_id) DO NOTHING
+    `, [id, rating, customer_feedback || '']);
+
     // Log history
     const auditRemark = `Ticket confirmed and closed by customer (Rating: ${rating}/5)`;
     await dbPool.query(`

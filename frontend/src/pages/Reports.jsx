@@ -13,6 +13,7 @@ const Reports = () => {
   const [departmentStats, setDepartmentStats] = useState([]);
   const [trends, setTrends] = useState([]);
   const [slaMetrics, setSlaMetrics] = useState(null);
+  const [csatMetrics, setCsatMetrics] = useState(null);
 
   // CSV download states
   const [exportError, setExportError] = useState('');
@@ -26,22 +27,25 @@ const Reports = () => {
         authFetch('/reports/tickets-by-priority'),
         authFetch('/reports/tickets-by-department'),
         authFetch('/reports/ticket-trends'),
-        authFetch('/reports/sla-compliance')
+        authFetch('/reports/sla-compliance'),
+        authFetch('/reports/csat-metrics')
       ];
 
-      const [statusRes, priorityRes, deptRes, trendsRes, slaRes] = await Promise.all(endpoints);
+      const [statusRes, priorityRes, deptRes, trendsRes, slaRes, csatRes] = await Promise.all(endpoints);
 
       const statusData = await statusRes.json();
       const priorityData = await priorityRes.json();
       const deptData = await deptRes.json();
       const trendsData = await trendsRes.json();
       const slaData = await slaRes.json();
+      const csatData = await csatRes.json();
 
       if (statusData.success) setStatusStats(statusData.data);
       if (priorityData.success) setPriorityStats(priorityData.data);
       if (deptData.success) setDepartmentStats(deptData.data);
       if (trendsData.success) setTrends(trendsData.data);
       if (slaData.success) setSlaMetrics(slaData.data);
+      if (csatData.success) setCsatMetrics(csatData.data);
 
     } catch (err) {
       console.error(err);
@@ -234,6 +238,15 @@ const Reports = () => {
                 Hours from creation to resolution
               </div>
             </div>
+            <div className="card stat-card" style={{ borderLeft: '4px solid #8b5cf6' }}>
+              <div className="label">Customer CSAT Score</div>
+              <div className="value" style={{ color: '#8b5cf6' }}>
+                {csatMetrics?.avg_rating ? `${csatMetrics.avg_rating.toFixed(2)} ★` : '—'}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                Feedback Rate: {csatMetrics?.feedback_rate !== undefined ? `${csatMetrics.feedback_rate}%` : '0%'}
+              </div>
+            </div>
           </div>
 
           {/* Registration Trends Graph */}
@@ -382,6 +395,49 @@ const Reports = () => {
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+
+          {/* Customer Satisfaction Rating Distribution */}
+          <div className="card">
+            <h3 style={{ marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.4rem' }}>
+              Satisfaction Ratings Distribution
+            </h3>
+            {!csatMetrics || csatMetrics.feedback_count === 0 ? (
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No feedback ratings collected yet.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {[5, 4, 3, 2, 1].map((ratingVal) => {
+                  const ratingCount = csatMetrics.distribution[ratingVal] || 0;
+                  const maxCount = Math.max(...Object.values(csatMetrics.distribution), 1);
+                  const percentage = ((ratingCount / maxCount) * 100).toFixed(0);
+
+                  return (
+                    <div key={ratingVal} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.85rem' }}>
+                      <span style={{ minWidth: '48px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.1rem' }}>
+                        {ratingVal} ★
+                      </span>
+                      <div style={{ background: '#f1f5f9', height: '1.25rem', borderRadius: '4px', overflow: 'hidden', position: 'relative', flexGrow: 1 }}>
+                        <div
+                          style={{
+                            background: '#8b5cf6',
+                            height: '100%',
+                            width: `${percentage}%`,
+                            transition: 'width 0.4s ease-in-out'
+                          }}
+                        />
+                      </div>
+                      <span style={{ minWidth: '40px', textAlign: 'right', fontWeight: '600', color: 'var(--text-muted)' }}>
+                        {ratingCount}
+                      </span>
+                    </div>
+                  );
+                })}
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  <span>Total Responses: <strong>{csatMetrics.feedback_count}</strong></span>
+                  <span>Average Score: <strong>{csatMetrics.avg_rating.toFixed(2)} / 5.0</strong></span>
+                </div>
               </div>
             )}
           </div>

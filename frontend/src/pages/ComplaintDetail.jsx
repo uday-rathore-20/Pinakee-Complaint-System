@@ -46,6 +46,14 @@ const ComplaintDetail = () => {
   const [fcrRating, setFcrRating] = useState(5);
   const [submittingFcrAction, setSubmittingFcrAction] = useState(false);
 
+  // CSAT Feedback Loop States
+  const [feedback, setFeedback] = useState(null);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [csatRating, setCsatRating] = useState(5);
+  const [csatComments, setCsatComments] = useState('');
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [feedbackError, setFeedbackError] = useState('');
+
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
 
@@ -139,6 +147,47 @@ const ComplaintDetail = () => {
       console.error('Failed to load FCR data:', err);
     } finally {
       setFcrLoading(false);
+    }
+  };
+
+  const fetchFeedbackDetails = async () => {
+    try {
+      setFeedbackLoading(true);
+      const res = await authFetch(`/complaints/${id}/feedback`);
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setFeedback(result.data);
+      }
+    } catch (err) {
+      console.error('Failed to load feedback details:', err);
+    } finally {
+      setFeedbackLoading(false);
+    }
+  };
+
+  const handleSubmitFeedback = async (e) => {
+    e.preventDefault();
+    setFeedbackError('');
+    setSubmittingFeedback(true);
+
+    try {
+      const res = await authFetch(`/complaints/${id}/feedback`, {
+        method: 'POST',
+        body: JSON.stringify({
+          rating: csatRating,
+          comments: csatComments
+        })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        await fetchFeedbackDetails();
+      } else {
+        setFeedbackError(result.message || 'Failed to submit feedback.');
+      }
+    } catch (err) {
+      setFeedbackError('Network error submitting feedback.');
+    } finally {
+      setSubmittingFeedback(false);
     }
   };
 
@@ -278,6 +327,7 @@ const ComplaintDetail = () => {
       await fetchLookups();
       await fetchAttachments();
       await fetchFcrData();
+      await fetchFeedbackDetails();
       setLoading(false);
     };
     init();
@@ -1001,6 +1051,82 @@ const ComplaintDetail = () => {
               )}
             </ul>
           </div>
+
+          {/* Customer Satisfaction Feedback (CSAT) Widget */}
+          {complaint.status === 'Closed' && (
+            <div className="card" style={{ borderLeft: '4px solid var(--primary-color)' }}>
+              <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem' }}>
+                Customer Satisfaction Feedback
+              </h3>
+              {feedbackLoading ? (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading feedback details...</p>
+              ) : feedback ? (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                    <span style={{ fontSize: '1.25rem', color: '#f59e0b' }}>
+                      {'★'.repeat(feedback.rating)}{'☆'.repeat(5 - feedback.rating)}
+                    </span>
+                    <strong style={{ fontSize: '0.9rem' }}>({feedback.rating} / 5)</strong>
+                  </div>
+                  {feedback.comments ? (
+                    <p style={{ fontSize: '0.875rem', background: '#f8fafc', padding: '0.5rem', borderRadius: '4px', margin: 0, fontStyle: 'italic' }}>
+                      "{feedback.comments}"
+                    </p>
+                  ) : (
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>No comments left.</p>
+                  )}
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                    Submitted on {new Date(feedback.created_at).toLocaleString()}
+                  </div>
+                </div>
+              ) : user.role === 'CUSTOMER' && complaint.created_by_id === user.id ? (
+                <form onSubmit={handleSubmitFeedback}>
+                  {feedbackError && <div className="alert alert-danger" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem', marginBottom: '0.75rem' }}>{feedbackError}</div>}
+                  <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                    <label className="form-label" style={{ fontSize: '0.8rem', marginBottom: '0.25rem' }}>Your Rating</label>
+                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button
+                          key={star}
+                          type="button"
+                          onClick={() => setCsatRating(star)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: 0,
+                            fontSize: '1.5rem',
+                            color: star <= csatRating ? '#f59e0b' : '#cbd5e1',
+                            outline: 'none'
+                          }}
+                        >
+                          ★
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                    <label className="form-label" style={{ fontSize: '0.8rem', marginBottom: '0.25rem' }}>Comments (Optional)</label>
+                    <textarea
+                      className="form-input"
+                      rows="2"
+                      value={csatComments}
+                      onChange={(e) => setCsatComments(e.target.value)}
+                      placeholder="Share your experience..."
+                      style={{ fontSize: '0.85rem' }}
+                    />
+                  </div>
+                  <button type="submit" className="btn btn-primary btn-block" disabled={submittingFeedback} style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}>
+                    {submittingFeedback ? 'Submitting...' : 'Submit Feedback'}
+                  </button>
+                </form>
+              ) : (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0, fontStyle: 'italic' }}>
+                  No feedback has been submitted for this complaint yet.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Claim Ticket Widget for Agents in the same department */}
           {user && (user.role === 'AGENT' || user.role === 'DEPT_HEAD') && !complaint.assigned_to_id && complaint.department_id === user.department_id && (

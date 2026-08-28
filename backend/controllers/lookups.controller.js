@@ -9,7 +9,7 @@ const getCategories = async (req, res) => {
     if (!dbPool) {
       return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
     }
-    const result = await dbPool.query('SELECT id, name, description FROM complaint_categories ORDER BY id ASC');
+    const result = await dbPool.query('SELECT id, name, description FROM complaint_categories WHERE is_active = true ORDER BY name ASC');
     return res.status(200).json({
       success: true,
       data: result.rows
@@ -29,7 +29,7 @@ const getDepartments = async (req, res) => {
     if (!dbPool) {
       return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
     }
-    const result = await dbPool.query('SELECT id, name, description FROM departments ORDER BY id ASC');
+    const result = await dbPool.query('SELECT id, name, description FROM departments WHERE is_active = true ORDER BY name ASC');
     return res.status(200).json({
       success: true,
       data: result.rows
@@ -69,7 +69,7 @@ const getPriorities = async (req, res) => {
     if (!dbPool) {
       return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
     }
-    const result = await dbPool.query('SELECT id, name, description FROM complaint_priorities ORDER BY id ASC');
+    const result = await dbPool.query('SELECT id, name, description, sla_hours FROM complaint_priorities ORDER BY id ASC');
     return res.status(200).json({
       success: true,
       data: result.rows

@@ -400,15 +400,31 @@ const ComplaintDetail = () => {
         throw new Error(result.message || 'Failed to download file');
       }
 
-      const blob = await res.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.setAttribute('download', fileName);
-      document.body.appendChild(link);
-      link.click();
-      link.parentNode.removeChild(link);
-      window.URL.revokeObjectURL(downloadUrl);
+      const contentType = res.headers.get('Content-Type') || '';
+      if (contentType.includes('application/json')) {
+        const result = await res.json();
+        if (result.success && result.downloadUrl) {
+          const link = document.createElement('a');
+          link.href = result.downloadUrl;
+          link.setAttribute('target', '_blank');
+          document.body.appendChild(link);
+          link.click();
+          link.parentNode.removeChild(link);
+        } else {
+          throw new Error(result.message || 'Failed to obtain download URL');
+        }
+      } else {
+        // Fallback for legacy streams
+        const blob = await res.blob();
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.setAttribute('download', fileName);
+        document.body.appendChild(link);
+        link.click();
+        link.parentNode.removeChild(link);
+        window.URL.revokeObjectURL(downloadUrl);
+      }
     } catch (err) {
       setActionError(err.message || 'Error occurred during file download.');
     }

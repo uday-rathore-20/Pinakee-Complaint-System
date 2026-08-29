@@ -1,5 +1,6 @@
 const dbPool = require('../config/db');
 const storage = require('../utils/storage');
+const { validateFileSignature } = require('../utils/fileValidator');
 
 /**
  * Helper to check if user has access to a specific complaint.
@@ -48,8 +49,18 @@ const uploadAttachment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Attachments cannot be added to closed complaints' });
     }
 
+    // Validate actual file type via magic byte signature validation
+    const validation = validateFileSignature(req.file.buffer, req.file.originalname);
+    if (!validation.valid) {
+      const logger = require('../utils/logger');
+      logger.audit('SECURITY_VIOLATION', { action: 'ATTACHMENT_SPOOF_REJECTED', fileName: req.file.originalname, reason: validation.reason }, user, req.ip);
+      return res.status(400).json({ success: false, message: `Upload rejected: ${validation.reason}` });
+    }
+
+    const detectedMime = validation.mimeType;
+
     // Save file via storage driver
-    const filePath = await storage.saveFile(req.file);
+    const filePath = await storage.saveFile(req.file, detectedMime);
 
     // Save metadata in database
     const insertQuery = `
@@ -62,7 +73,7 @@ const uploadAttachment = async (req, res) => {
       req.file.originalname,
       filePath,
       req.file.size,
-      req.file.mimetype,
+      detectedMime,
       user.id
     ]);
 
@@ -171,15 +182,29 @@ const downloadAttachment = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to download this attachment' });
     }
 
-    // Get readable file stream via storage driver
-    const fileStream = await storage.getFileStream(attachment.file_path);
+    // Determine if this is a legacy local upload (does not start with 'attachments/')
+    const isLegacy = !attachment.file_path.startsWith('attachments/');
 
-    // Set download headers
-    res.setHeader('Content-Type', attachment.mime_type);
-    res.setHeader('Content-Disposition', `attachment; filename="${attachment.file_name}"`);
+    if (isLegacy) {
+      const fs = require('fs');
+      const path = require('path');
+      const fullPath = path.join(__dirname, '..', attachment.file_path);
+      if (!fs.existsSync(fullPath)) {
+        return res.status(404).json({ success: false, message: 'Legacy file not found on local disk' });
+      }
+      res.setHeader('Content-Type', attachment.mime_type);
+      res.setHeader('Content-Disposition', `attachment; filename="${attachment.file_name}"`);
+      return fs.createReadStream(fullPath).pipe(res);
+    }
 
-    // Stream to client
-    fileStream.pipe(res);
+    // Modern upload: S3 client or Mock client
+    const downloadUrl = await storage.getDownloadUrl(attachment.file_path, attachment.file_name);
+
+    // Actual AWS S3 (or Mock S3 simulator) - Return pre-signed download URL via JSON
+    return res.status(200).json({
+      success: true,
+      downloadUrl: downloadUrl
+    });
   } catch (error) {
     console.error('Download attachment error:', error.message);
     return res.status(500).json({ success: false, message: 'Failed to download attachment' });
@@ -243,17 +268,30 @@ const deleteAttachment = async (req, res) => {
       }
     }
 
-    // Delete file from disk via storage driver
-    await storage.deleteFile(attachment.file_path);
+    // Delete file and database record inside an atomic transaction
+    const client = await dbPool.connect();
+    try {
+      await client.query('BEGIN');
 
-    // Remove record from database
-    await dbPool.query('DELETE FROM complaint_attachments WHERE id = $1', [id]);
+      // 1. Delete from database first
+      await client.query('DELETE FROM complaint_attachments WHERE id = $1', [id]);
 
-    // Add a comment to audit log discussion
-    await dbPool.query(`
-      INSERT INTO complaint_comments (complaint_id, user_id, comment_text, is_internal)
-      VALUES ($1, $2, $3, false)
-    `, [attachment.complaint_id, user.id, `Removed attached file: ${attachment.file_name}`]);
+      // 2. Delete from S3 storage
+      await storage.deleteFile(attachment.file_path);
+
+      // 3. Add audit discussion log
+      await client.query(`
+        INSERT INTO complaint_comments (complaint_id, user_id, comment_text, is_internal)
+        VALUES ($1, $2, $3, false)
+      `, [attachment.complaint_id, user.id, `Removed attached file: ${attachment.file_name}`]);
+
+      await client.query('COMMIT');
+    } catch (txError) {
+      await client.query('ROLLBACK');
+      throw txError;
+    } finally {
+      client.release();
+    }
 
     const logger = require('../utils/logger');
     logger.audit('ATTACHMENT_DELETED', { complaintId: attachment.complaint_id, fileName: attachment.file_name }, user, req.ip);
@@ -269,9 +307,51 @@ const deleteAttachment = async (req, res) => {
   }
 };
 
+/**
+ * Public route to simulate S3 download via pre-signed URL navigation
+ * GET /api/attachments/mock-download/:filename
+ */
+const mockDownloadAttachment = async (req, res) => {
+  const { filename } = req.params;
+  const { fileName } = req.query; // Display name
+
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const fullPath = path.join(__dirname, '..', 'uploads', filename);
+
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).send('Mock S3 file not found');
+    }
+
+    // Determine content type based on extension
+    const ext = filename.split('.').pop().toLowerCase();
+    const mimeMap = {
+      pdf: 'application/pdf',
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      gif: 'image/gif',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      txt: 'text/plain',
+      csv: 'text/csv'
+    };
+
+    res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName || filename}"`);
+    fs.createReadStream(fullPath).pipe(res);
+  } catch (error) {
+    console.error('Mock download error:', error.message);
+    res.status(500).send('Failed to stream mock S3 file');
+  }
+};
+
 module.exports = {
   uploadAttachment,
   getAttachments,
   downloadAttachment,
   deleteAttachment,
+  mockDownloadAttachment,
 };

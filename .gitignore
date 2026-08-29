@@ -42,3 +42,6 @@ backend/logs/
 
 # Temporary scratch directories
 backend/scratch/
+
+# Runtime archives
+backend/archives/

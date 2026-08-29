@@ -11,7 +11,10 @@ const {
   getPriorities,
   updatePrioritySla,
   getRoutingMode,
-  updateRoutingMode
+  updateRoutingMode,
+  listArchives,
+  downloadArchive,
+  runArchiveManually
 } = require('../controllers/settings.controller');
 
 // Require authentication and ADMIN role for all routes in this settings router
@@ -31,5 +34,9 @@ router.put('/priorities/:id', updatePrioritySla);
 
 router.get('/routing', getRoutingMode);
 router.put('/routing', updateRoutingMode);
+
+router.get('/archives', listArchives);
+router.get('/archives/:filename', downloadArchive);
+router.post('/archives/run', runArchiveManually);
 
 module.exports = router;

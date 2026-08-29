@@ -381,6 +381,114 @@ const updateRoutingMode = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/settings/archives
+ */
+const listArchives = async (req, res) => {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const archiveDir = path.join(__dirname, '..', 'archives');
+
+    if (!fs.existsSync(archiveDir)) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const files = fs.readdirSync(archiveDir);
+    const data = [];
+
+    files.forEach(filename => {
+      // Only include valid archive files matching the exact regex format
+      const archivePattern = /^archive-(audit|notifications)-\d{8}-\d{6}\.json\.gz$/;
+      if (archivePattern.test(filename)) {
+        const filePath = path.join(archiveDir, filename);
+        const stats = fs.statSync(filePath);
+        data.push({
+          filename,
+          size: stats.size,
+          created_at: stats.mtime
+        });
+      }
+    });
+
+    // Sort by newest first
+    data.sort((a, b) => b.created_at - a.created_at);
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Settings listArchives error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve archive list' });
+  }
+};
+
+/**
+ * GET /api/settings/archives/:filename
+ */
+const downloadArchive = async (req, res) => {
+  const { filename } = req.params;
+  const user = req.user;
+
+  // Strict regex pattern check matching expected naming format
+  const archivePattern = /^archive-(audit|notifications)-\d{8}-\d{6}\.json\.gz$/;
+  if (!filename || !archivePattern.test(filename)) {
+    return res.status(400).json({ success: false, message: 'Invalid or malformed filename format' });
+  }
+
+  // Traversal checks
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    return res.status(400).json({ success: false, message: 'Path traversal attempts detected and blocked' });
+  }
+
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const archiveDir = path.join(__dirname, '..', 'archives');
+    const filePath = path.join(archiveDir, filename);
+    const resolvedPath = path.resolve(filePath);
+    const resolvedDir = path.resolve(archiveDir);
+
+    if (!resolvedPath.startsWith(resolvedDir)) {
+      logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { action: 'download_archive_traversal', filename }, user, req.ip);
+      return res.status(403).json({ success: false, message: 'Access forbidden: Path outside of archives directory' });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, message: 'Archive file not found' });
+    }
+
+    logger.audit('SETTINGS_UPDATED', { action: 'DOWNLOAD_ARCHIVE_LOG', filename }, user, req.ip);
+
+    return res.download(filePath, filename);
+  } catch (error) {
+    console.error('Settings downloadArchive error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to stream archive download' });
+  }
+};
+
+/**
+ * POST /api/settings/archives/run
+ */
+const runArchiveManually = async (req, res) => {
+  const user = req.user;
+  try {
+    const { runArchiver } = require('../utils/archiveDaemon');
+    const result = await runArchiver(user, req.ip);
+
+    if (!result.success) {
+      return res.status(409).json(result);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Database archiving completed successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Settings runArchiveManually error:', error.message);
+    return res.status(500).json({ success: false, message: error.message || 'Archiving execution failed' });
+  }
+};
+
 module.exports = {
   getDepartments,
   createDepartment,
@@ -391,5 +499,8 @@ module.exports = {
   getPriorities,
   updatePrioritySla,
   getRoutingMode,
-  updateRoutingMode
+  updateRoutingMode,
+  listArchives,
+  downloadArchive,
+  runArchiveManually
 };

@@ -14,6 +14,7 @@ const Settings = () => {
   const [categories, setCategories] = useState([]);
   const [priorities, setPriorities] = useState([]);
   const [routingMode, setRoutingMode] = useState('MANUAL');
+  const [archives, setArchives] = useState([]);
 
   // Create Form States
   const [newDeptName, setNewDeptName] = useState('');
@@ -31,26 +32,32 @@ const Settings = () => {
   const [editingPriorities, setEditingPriorities] = useState({}); // map: priorityId -> sla_hours string
   const [updatingPriorities, setUpdatingPriorities] = useState({}); // map: priorityId -> boolean (loading)
 
+  // Archiving Triggering state
+  const [triggeringArchive, setTriggeringArchive] = useState(false);
+
   const fetchData = async () => {
     setLoading(true);
     setError('');
     setActionError('');
     try {
-      const [deptRes, catRes, priRes, routingRes] = await Promise.all([
+      const [deptRes, catRes, priRes, routingRes, archivesRes] = await Promise.all([
         authFetch('/settings/departments'),
         authFetch('/settings/categories'),
         authFetch('/settings/priorities'),
-        authFetch('/settings/routing')
+        authFetch('/settings/routing'),
+        authFetch('/settings/archives')
       ]);
 
       const deptData = await deptRes.json();
       const catData = await catRes.json();
       const priData = await priRes.json();
       const routingData = await routingRes.json();
+      const archivesData = await archivesRes.json();
 
       if (deptData.success) setDepartments(deptData.data);
       if (catData.success) setCategories(catData.data);
       if (routingData.success) setRoutingMode(routingData.mode);
+      if (archivesData.success) setArchives(archivesData.data);
       if (priData.success) {
         setPriorities(priData.data);
         // Initialize editing SLA hours mapping
@@ -83,6 +90,50 @@ const Settings = () => {
     setActionError(msg);
     setSuccessMessage('');
     setTimeout(() => setActionError(''), 5000);
+  };
+
+  const handleDownloadArchive = async (filename) => {
+    try {
+      const res = await authFetch(`/settings/archives/${filename}`);
+      if (!res.ok) {
+        const errResult = await res.json();
+        triggerError(errResult.message || 'Failed to download archive file');
+        return;
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+    } catch (err) {
+      triggerError('Network error downloading archive file');
+    }
+  };
+
+  const handleTriggerArchive = async () => {
+    setTriggeringArchive(true);
+    setActionError('');
+    try {
+      const res = await authFetch('/settings/archives/run', { method: 'POST' });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        const { auditPruned, notificationsPruned, filesGenerated } = result.data;
+        triggerSuccess(`Archival completed successfully. Pruned ${auditPruned} audit logs, ${notificationsPruned} notifications. Created: ${filesGenerated.join(', ') || 'None'}`);
+        // Reload archives list
+        const listRes = await authFetch('/settings/archives');
+        const listData = await listRes.json();
+        if (listData.success) setArchives(listData.data);
+      } else {
+        triggerError(result.message || 'Archival execution failed.');
+      }
+    } catch (err) {
+      triggerError('Network error triggering archive execution.');
+    } finally {
+      setTriggeringArchive(false);
+    }
   };
 
   // Department handlers
@@ -334,6 +385,22 @@ const Settings = () => {
           }}
         >
           Ticket Routing
+        </button>
+        <button
+          onClick={() => setActiveTab('archives')}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '0.75rem 1rem',
+            cursor: 'pointer',
+            fontSize: '0.95rem',
+            fontWeight: 'bold',
+            color: activeTab === 'archives' ? 'var(--primary-color)' : 'var(--text-muted)',
+            borderBottom: activeTab === 'archives' ? '3px solid var(--primary-color)' : '3px solid transparent',
+            marginBottom: '-2px'
+          }}
+        >
+          Archived Logs
         </button>
       </div>
 
@@ -636,6 +703,67 @@ const Settings = () => {
               </button>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* ARCHIVED LOGS TAB CONTENT */}
+      {activeTab === 'archives' && (
+        <div className="card" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
+            <h2 style={{ fontSize: '1.15rem', margin: 0 }}>
+              System Log Archives ({archives.length})
+            </h2>
+            <button
+              onClick={handleTriggerArchive}
+              className="btn btn-primary"
+              disabled={triggeringArchive}
+              style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}
+            >
+              {triggeringArchive ? 'Archiving...' : 'Trigger Archival Run'}
+            </button>
+          </div>
+
+          <div style={{ marginBottom: '1rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            System logs (audit trail and notifications) older than 90 days are automatically archived weekly.
+            You can manually trigger a run or download historical logs below.
+          </div>
+
+          {archives.length === 0 ? (
+            <div style={{ padding: '2rem', textAlign: 'center', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px dashed var(--border-color)', color: 'var(--text-muted)' }}>
+              No log archives generated yet.
+            </div>
+          ) : (
+            <div className="table-responsive">
+              <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid var(--border-color)', textAlign: 'left' }}>
+                    <th style={{ padding: '0.75rem' }}>Filename</th>
+                    <th style={{ padding: '0.75rem' }}>Size</th>
+                    <th style={{ padding: '0.75rem' }}>Created At</th>
+                    <th style={{ padding: '0.75rem', textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {archives.map(arc => (
+                    <tr key={arc.filename} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <td style={{ padding: '0.75rem', fontWeight: '500' }}>{arc.filename}</td>
+                      <td style={{ padding: '0.75rem' }}>{(arc.size / 1024).toFixed(2)} KB</td>
+                      <td style={{ padding: '0.75rem' }}>{new Date(arc.created_at).toLocaleString()}</td>
+                      <td style={{ padding: '0.75rem', textAlign: 'right' }}>
+                        <button
+                          onClick={() => handleDownloadArchive(arc.filename)}
+                          className="btn btn-secondary"
+                          style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}
+                        >
+                          Download
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

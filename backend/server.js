@@ -176,6 +176,10 @@ const server = app.listen(PORT, () => {
   // Start background SLA breach monitoring scheduler (checks every 60s)
   const { startSlaScheduler } = require('./utils/slaScheduler');
   startSlaScheduler(60000);
+
+  // Start background log archiving daemon scheduler (checks every 24h)
+  const { startArchiveScheduler } = require('./utils/archiveDaemon');
+  startArchiveScheduler(24 * 60 * 60 * 1000);
 });
 
 // Initialize Socket.IO engine

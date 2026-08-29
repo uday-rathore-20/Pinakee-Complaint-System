@@ -326,6 +326,61 @@ const updatePrioritySla = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/settings/routing
+ */
+const getRoutingMode = async (req, res) => {
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+    const result = await dbPool.query("SELECT value FROM system_settings WHERE key = 'ticket_routing_mode'");
+    const mode = result.rows[0]?.value || 'MANUAL';
+    return res.status(200).json({ success: true, mode });
+  } catch (error) {
+    console.error('Settings getRoutingMode error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve routing setting' });
+  }
+};
+
+/**
+ * PUT /api/settings/routing
+ */
+const updateRoutingMode = async (req, res) => {
+  const { mode } = req.body;
+  const user = req.user;
+
+  if (!mode || !['MANUAL', 'ROUND_ROBIN', 'LEAST_BUSY'].includes(mode)) {
+    return res.status(400).json({ success: false, message: 'Invalid routing mode. Must be MANUAL, ROUND_ROBIN, or LEAST_BUSY' });
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    const updateQuery = `
+      INSERT INTO system_settings (key, value, description)
+      VALUES ('ticket_routing_mode', $1, 'Active ticket routing strategy')
+      ON CONFLICT (key)
+      DO UPDATE SET value = EXCLUDED.value
+      RETURNING value
+    `;
+    const result = await dbPool.query(updateQuery, [mode]);
+
+    logger.audit('SETTINGS_UPDATED', { action: 'UPDATE_ROUTING_MODE', mode }, user, req.ip);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Routing mode updated successfully',
+      mode: result.rows[0].value
+    });
+  } catch (error) {
+    console.error('Settings updateRoutingMode error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to update routing mode' });
+  }
+};
+
 module.exports = {
   getDepartments,
   createDepartment,
@@ -334,5 +389,7 @@ module.exports = {
   createCategory,
   updateCategory,
   getPriorities,
-  updatePrioritySla
+  updatePrioritySla,
+  getRoutingMode,
+  updateRoutingMode
 };

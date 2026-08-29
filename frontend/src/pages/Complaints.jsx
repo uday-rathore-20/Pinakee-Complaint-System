@@ -10,6 +10,7 @@ const Complaints = () => {
   const [categories, setCategories] = useState([]);
   const [priorities, setPriorities] = useState([]);
   const [statuses, setStatuses] = useState([]);
+  const [departments, setDepartments] = useState([]);
   
   // Active queue for AGENT (defaults to 'my')
   const [activeQueue, setActiveQueue] = useState('my');
@@ -32,6 +33,7 @@ const Complaints = () => {
   const [formDesc, setFormDesc] = useState('');
   const [formCat, setFormCat] = useState('');
   const [formPri, setFormPri] = useState('');
+  const [formDept, setFormDept] = useState('');
   
   const [loading, setLoading] = useState(true);
   const [formSubmitting, setFormSubmitting] = useState(false);
@@ -44,14 +46,17 @@ const Complaints = () => {
       const catRes = await authFetch('/categories');
       const priRes = await authFetch('/priorities');
       const statusRes = await authFetch('/statuses');
+      const deptRes = await authFetch('/departments');
       
       const categoriesResult = await catRes.json();
       const prioritiesResult = await priRes.json();
       const statusesResult = await statusRes.json();
+      const departmentsResult = await deptRes.json();
 
       if (categoriesResult.success) setCategories(categoriesResult.data);
       if (prioritiesResult.success) setPriorities(prioritiesResult.data);
       if (statusesResult.success) setStatuses(statusesResult.data);
+      if (departmentsResult.success) setDepartments(departmentsResult.data);
 
       await fetchComplaints();
     } catch (err) {
@@ -174,7 +179,8 @@ const Complaints = () => {
           title: formTitle,
           description: formDesc,
           category_id: parseInt(formCat),
-          priority_id: parseInt(formPri)
+          priority_id: parseInt(formPri),
+          department_id: formDept ? parseInt(formDept) : null
         })
       });
       const result = await res.json();
@@ -185,6 +191,7 @@ const Complaints = () => {
         setFormDesc('');
         setFormCat('');
         setFormPri('');
+        setFormDept('');
         setShowModal(false);
         // Refresh list
         fetchComplaints();
@@ -459,6 +466,18 @@ const Complaints = () => {
                   placeholder="Describe the complaint with detail..."
                   required
                 />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Department Group (Optional)</label>
+                <select
+                  className="form-input"
+                  value={formDept}
+                  onChange={(e) => setFormDept(e.target.value)}
+                >
+                  <option value="">No Department (Manual routing)</option>
+                  {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>

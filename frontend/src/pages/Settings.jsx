@@ -13,11 +13,15 @@ const Settings = () => {
   const [departments, setDepartments] = useState([]);
   const [categories, setCategories] = useState([]);
   const [priorities, setPriorities] = useState([]);
+  const [routingMode, setRoutingMode] = useState('MANUAL');
 
   // Create Form States
   const [newDeptName, setNewDeptName] = useState('');
   const [newDeptDesc, setNewDeptDesc] = useState('');
   const [submittingDept, setSubmittingDept] = useState(false);
+
+  // Ticket routing submit state
+  const [updatingRouting, setUpdatingRouting] = useState(false);
 
   const [newCatName, setNewCatName] = useState('');
   const [newCatDesc, setNewCatDesc] = useState('');
@@ -32,18 +36,21 @@ const Settings = () => {
     setError('');
     setActionError('');
     try {
-      const [deptRes, catRes, priRes] = await Promise.all([
+      const [deptRes, catRes, priRes, routingRes] = await Promise.all([
         authFetch('/settings/departments'),
         authFetch('/settings/categories'),
-        authFetch('/settings/priorities')
+        authFetch('/settings/priorities'),
+        authFetch('/settings/routing')
       ]);
 
       const deptData = await deptRes.json();
       const catData = await catRes.json();
       const priData = await priRes.json();
+      const routingData = await routingRes.json();
 
       if (deptData.success) setDepartments(deptData.data);
       if (catData.success) setCategories(catData.data);
+      if (routingData.success) setRoutingMode(routingData.mode);
       if (priData.success) {
         setPriorities(priData.data);
         // Initialize editing SLA hours mapping
@@ -211,6 +218,29 @@ const Settings = () => {
     }
   };
 
+  // Routing handlers
+  const handleUpdateRoutingMode = async (e) => {
+    e.preventDefault();
+    setUpdatingRouting(true);
+    try {
+      const res = await authFetch('/settings/routing', {
+        method: 'PUT',
+        body: JSON.stringify({ mode: routingMode })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setRoutingMode(result.mode);
+        triggerSuccess(`Ticket routing strategy updated to ${result.mode} successfully.`);
+      } else {
+        triggerError(result.message || 'Failed to update routing strategy.');
+      }
+    } catch (err) {
+      triggerError('Network error updating routing strategy.');
+    } finally {
+      setUpdatingRouting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="page-container">
@@ -288,6 +318,22 @@ const Settings = () => {
           }}
         >
           SLA Targets (Priorities)
+        </button>
+        <button
+          onClick={() => setActiveTab('routing')}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '0.75rem 1rem',
+            cursor: 'pointer',
+            fontSize: '0.95rem',
+            fontWeight: 'bold',
+            color: activeTab === 'routing' ? 'var(--primary-color)' : 'var(--text-muted)',
+            borderBottom: activeTab === 'routing' ? '3px solid var(--primary-color)' : '3px solid transparent',
+            marginBottom: '-2px'
+          }}
+        >
+          Ticket Routing
         </button>
       </div>
 
@@ -516,6 +562,79 @@ const Settings = () => {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* TICKET ROUTING TAB CONTENT */}
+      {activeTab === 'routing' && (
+        <div style={{ maxWidth: '640px' }}>
+          <div className="card">
+            <h2 style={{ fontSize: '1.15rem', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
+              Automated Ticket Auto-Routing & Load-Balancing Engine
+            </h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
+              Select the active ticket allocation mechanism for all departments. Automatic assignments only rotate through active agents belonging to the target department.
+            </p>
+
+            <form onSubmit={handleUpdateRoutingMode}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#f8fafc', border: '1px solid var(--border-color)' }}>
+                  <input
+                    type="radio"
+                    name="routingMode"
+                    value="MANUAL"
+                    checked={routingMode === 'MANUAL'}
+                    onChange={(e) => setRoutingMode(e.target.value)}
+                    style={{ marginTop: '0.2rem' }}
+                  />
+                  <div>
+                    <strong>Manual Assignment</strong>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                      New tickets are filed unassigned. Admins or Department Heads must route and assign them manually.
+                    </div>
+                  </div>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#f8fafc', border: '1px solid var(--border-color)' }}>
+                  <input
+                    type="radio"
+                    name="routingMode"
+                    value="ROUND_ROBIN"
+                    checked={routingMode === 'ROUND_ROBIN'}
+                    onChange={(e) => setRoutingMode(e.target.value)}
+                    style={{ marginTop: '0.2rem' }}
+                  />
+                  <div>
+                    <strong>Round Robin Strategy</strong>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                      Sequentially distributes new complaints among active agents belonging to the target department in a rotation.
+                    </div>
+                  </div>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer', padding: '0.75rem', borderRadius: '6px', backgroundColor: '#f8fafc', border: '1px solid var(--border-color)' }}>
+                  <input
+                    type="radio"
+                    name="routingMode"
+                    value="LEAST_BUSY"
+                    checked={routingMode === 'LEAST_BUSY'}
+                    onChange={(e) => setRoutingMode(e.target.value)}
+                    style={{ marginTop: '0.2rem' }}
+                  />
+                  <div>
+                    <strong>Least Busy Load Balancing</strong>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                      Assigns new complaints to the active agent in the target department who has the lowest number of active/open tickets (excluding Resolved and Closed).
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              <button type="submit" className="btn btn-primary" disabled={updatingRouting}>
+                {updatingRouting ? 'Updating...' : 'Save Strategy'}
+              </button>
+            </form>
           </div>
         </div>
       )}

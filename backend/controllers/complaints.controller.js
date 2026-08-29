@@ -1,5 +1,6 @@
 const dbPool = require('../config/db');
 const logger = require('../utils/logger');
+const { routeTicket } = require('../utils/routingEngine');
 
 /**
  * Generate a unique ticket number: PIN-YYYYMMDD-XXXX
@@ -284,7 +285,7 @@ const getComplaintById = async (req, res) => {
  * POST /api/complaints
  */
 const createComplaint = async (req, res) => {
-  const { title, description, category_id, priority_id, created_by_id } = req.body;
+  const { title, description, category_id, priority_id, created_by_id, department_id } = req.body;
   const user = req.user;
 
   // Validation
@@ -322,48 +323,94 @@ const createComplaint = async (req, res) => {
     const dueDate = new Date();
     dueDate.setHours(dueDate.getHours() + slaHours);
 
-    // Get Pending status ID
-    const pendingStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Pending'");
-    if (pendingStatusResult.rows.length === 0) {
-      return res.status(500).json({ success: false, message: 'Default status configuration missing' });
+    // Validate department_id if provided
+    let targetDeptId = null;
+    if (department_id) {
+      const deptCheck = await dbPool.query('SELECT id FROM departments WHERE id = $1 AND is_active = true', [department_id]);
+      if (deptCheck.rows.length === 0) {
+        return res.status(400).json({ success: false, message: 'Invalid or inactive department_id' });
+      }
+      targetDeptId = department_id;
     }
-    const statusId = pendingStatusResult.rows[0].id;
+
+    // Get status IDs
+    const pendingStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Pending'");
+    const assignedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Assigned'");
+
+    if (pendingStatusResult.rows.length === 0 || assignedStatusResult.rows.length === 0) {
+      return res.status(500).json({ success: false, message: 'Required status configurations are missing' });
+    }
+
+    const pendingId = pendingStatusResult.rows[0].id;
+    const assignedId = assignedStatusResult.rows[0].id;
 
     // Generate unique ticket number
     const ticketNumber = await generateTicketNumber();
 
-    // Insert
-    const insertQuery = `
-      INSERT INTO complaints (ticket_number, title, description, created_by_id, category_id, status_id, priority_id, due_date)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING *
-    `;
-    const result = await dbPool.query(insertQuery, [
-      ticketNumber,
-      title.trim(),
-      description.trim(),
-      targetCreatorId,
-      category_id,
-      statusId,
-      priority_id,
-      dueDate
-    ]);
+    // Start a transaction to ensure atomic auto-routing and insertion
+    const client = await dbPool.connect();
+    let resultComplaint = null;
+    try {
+      await client.query('BEGIN');
 
-    // Log the initial "Pending" history entry
-    await dbPool.query(`
-      INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
-      VALUES ($1, $2, null, $3, 'Complaint registered successfully')
-    `, [result.rows[0].id, user.id, statusId]);
+      let assignedAgentId = null;
+      let targetStatusId = pendingId;
 
-    logger.audit('COMPLAINT_CREATED', { complaintId: result.rows[0].id, ticketNumber: result.rows[0].ticket_number }, user, req.ip);
+      if (targetDeptId) {
+        assignedAgentId = await routeTicket(targetDeptId, client);
+        if (assignedAgentId) {
+          targetStatusId = assignedId;
+        }
+      }
+
+      // Insert
+      const insertQuery = `
+        INSERT INTO complaints (ticket_number, title, description, created_by_id, category_id, status_id, priority_id, due_date, department_id, assigned_to_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING *
+      `;
+      const insertRes = await client.query(insertQuery, [
+        ticketNumber,
+        title.trim(),
+        description.trim(),
+        targetCreatorId,
+        category_id,
+        targetStatusId,
+        priority_id,
+        dueDate,
+        targetDeptId,
+        assignedAgentId
+      ]);
+
+      resultComplaint = insertRes.rows[0];
+
+      // Log the initial history entry
+      const remark = assignedAgentId
+        ? `Complaint registered and auto-assigned to agent ID ${assignedAgentId}`
+        : 'Complaint registered successfully';
+
+      await client.query(`
+        INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+        VALUES ($1, $2, null, $3, $4)
+      `, [resultComplaint.id, user.id, targetStatusId, remark]);
+
+      await client.query('COMMIT');
+    } catch (txError) {
+      await client.query('ROLLBACK');
+      throw txError;
+    } finally {
+      client.release();
+    }
+
+    logger.audit('COMPLAINT_CREATED', { complaintId: resultComplaint.id, ticketNumber: resultComplaint.ticket_number }, user, req.ip);
 
     const notifications = require('../utils/notifications');
-    notifications.notifyComplaintCreated(result.rows[0]).catch(err => console.error('Failed to trigger in-app notification:', err));
+    notifications.notifyComplaintCreated(resultComplaint).catch(err => console.error('Failed to trigger in-app notification:', err));
 
     return res.status(201).json({
       success: true,
       message: 'Complaint submitted successfully',
-      data: result.rows[0]
+      data: resultComplaint
     });
   } catch (error) {
     console.error('Create complaint error:', error.message);
@@ -549,40 +596,61 @@ const assignComplaint = async (req, res) => {
     }
 
     // Determine target department and assignee
-    const finalDeptId = department_id !== undefined ? department_id : complaint.department_id;
-    const finalAssigneeId = assigned_to_id !== undefined ? assigned_to_id : complaint.assigned_to_id;
+    let finalDeptId = department_id !== undefined ? department_id : complaint.department_id;
+    let finalAssigneeId = assigned_to_id !== undefined ? assigned_to_id : complaint.assigned_to_id;
 
     // Check if assignment triggers automatic status change from "Pending" to "Assigned"
-    let targetStatusId = complaint.status_id;
     const pendingStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Pending'");
     const assignedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Assigned'");
     
     const pendingId = pendingStatusResult.rows[0]?.id;
     const assignedId = assignedStatusResult.rows[0]?.id;
 
-    let statusTransitionLogged = false;
+    // Execute within a database transaction block
+    const client = await dbPool.connect();
+    let resultComplaint = null;
+    try {
+      await client.query('BEGIN');
 
-    if (complaint.status_id === pendingId && assignedId && (finalDeptId || finalAssigneeId)) {
-      targetStatusId = assignedId;
+      // Trigger auto-routing if department_id is set but assigned_to_id is not specified in this routing request
+      if (department_id !== undefined && department_id !== null && !assigned_to_id) {
+        const autoAgentId = await routeTicket(department_id, client);
+        if (autoAgentId) {
+          finalAssigneeId = autoAgentId;
+        }
+      }
+
+      let targetStatusId = complaint.status_id;
+      if (complaint.status_id === pendingId && assignedId && (finalDeptId || finalAssigneeId)) {
+        targetStatusId = assignedId;
+      }
+
+      // Execute assignment update
+      const updateQuery = `
+        UPDATE complaints
+        SET department_id = $1, assigned_to_id = $2, status_id = $3
+        WHERE id = $4
+        RETURNING *
+      `;
+      const updateRes = await client.query(updateQuery, [finalDeptId || null, finalAssigneeId || null, targetStatusId, id]);
+      resultComplaint = updateRes.rows[0];
+
+      // Log the assignment remark or state change
+      const defaultRemark = `Ticket routed (Dept ID: ${finalDeptId || 'None'}, Assignee ID: ${finalAssigneeId || 'None'})`;
+      const auditRemark = remarks ? remarks.trim() : defaultRemark;
+
+      await client.query(`
+        INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [id, user.id, complaint.status_id, targetStatusId, auditRemark]);
+
+      await client.query('COMMIT');
+    } catch (txError) {
+      await client.query('ROLLBACK');
+      throw txError;
+    } finally {
+      client.release();
     }
-
-    // Execute assignment update
-    const updateQuery = `
-      UPDATE complaints
-      SET department_id = $1, assigned_to_id = $2, status_id = $3
-      WHERE id = $4
-      RETURNING *
-    `;
-    const result = await dbPool.query(updateQuery, [finalDeptId || null, finalAssigneeId || null, targetStatusId, id]);
-
-    // Log the assignment remark or state change
-    const defaultRemark = `Ticket routed (Dept ID: ${finalDeptId || 'None'}, Assignee ID: ${finalAssigneeId || 'None'})`;
-    const auditRemark = remarks ? remarks.trim() : defaultRemark;
-
-    await dbPool.query(`
-      INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [id, user.id, complaint.status_id, targetStatusId, auditRemark]);
 
     // Send email notification to assignee if assignee has been changed or set
     if (finalAssigneeId && finalAssigneeId !== complaint.assigned_to_id) {
@@ -591,19 +659,19 @@ const assignComplaint = async (req, res) => {
         const assigneeUser = assigneeResult.rows[0];
         const notifications = require('../utils/notifications');
         notifications.sendAssignmentNotification({
-          ticket_number: result.rows[0].ticket_number,
-          title: result.rows[0].title,
+          ticket_number: resultComplaint.ticket_number,
+          title: resultComplaint.title,
           priority: complaint.priority
         }, assigneeUser).catch(err => console.error('Failed to dispatch assignment email:', err));
 
-        notifications.notifyComplaintAssigned(result.rows[0], finalAssigneeId).catch(err => console.error('Failed to trigger in-app assignment notification:', err));
+        notifications.notifyComplaintAssigned(resultComplaint, finalAssigneeId).catch(err => console.error('Failed to trigger in-app assignment notification:', err));
       }
     }
 
     return res.status(200).json({
       success: true,
       message: 'Complaint assignment updated successfully',
-      data: result.rows[0]
+      data: resultComplaint
     });
   } catch (error) {
     console.error('Assign complaint error:', error.message);

@@ -9,7 +9,9 @@ const {
   createCategory,
   updateCategory,
   getPriorities,
-  updatePrioritySla
+  updatePrioritySla,
+  getRoutingMode,
+  updateRoutingMode
 } = require('../controllers/settings.controller');
 
 // Require authentication and ADMIN role for all routes in this settings router
@@ -26,5 +28,8 @@ router.put('/categories/:id', updateCategory);
 
 router.get('/priorities', getPriorities);
 router.put('/priorities/:id', updatePrioritySla);
+
+router.get('/routing', getRoutingMode);
+router.put('/routing', updateRoutingMode);
 
 module.exports = router;

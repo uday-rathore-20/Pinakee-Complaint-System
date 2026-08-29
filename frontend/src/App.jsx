@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { SocketProvider, useSocket } from './context/SocketContext';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Complaints from './pages/Complaints';
@@ -14,6 +15,7 @@ import Settings from './pages/Settings';
 // In-app Notifications Dropdown Widget
 const NotificationWidget = () => {
   const { authFetch } = useAuth();
+  const socket = useSocket();
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
@@ -50,10 +52,30 @@ const NotificationWidget = () => {
     const interval = setInterval(() => {
       fetchNotifications();
       fetchUnreadCount();
-    }, 10000);
+    }, 30000); // fallback polling at longer intervals
 
     return () => clearInterval(interval);
   }, []);
+
+  // Listen for real-time notification events
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleNewNotification = (newNotif) => {
+      setNotifications(prev => {
+        // Prevent duplicate entries
+        if (prev.some(n => n.id === newNotif.id)) return prev;
+        return [newNotif, ...prev].slice(0, 20);
+      });
+      setUnreadCount(prev => prev + 1);
+    };
+
+    socket.on('notification:new', handleNewNotification);
+
+    return () => {
+      socket.off('notification:new', handleNewNotification);
+    };
+  }, [socket]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -423,76 +445,78 @@ const GuestRoute = ({ children }) => {
 function App() {
   return (
     <AuthProvider>
-      <Router>
-        <Routes>
-          {/* Guest Auth Route */}
-          <Route path="/login" element={
-            <GuestRoute>
-              <Login />
-            </GuestRoute>
-          } />
+      <SocketProvider>
+        <Router>
+          <Routes>
+            {/* Guest Auth Route */}
+            <Route path="/login" element={
+              <GuestRoute>
+                <Login />
+              </GuestRoute>
+            } />
 
-          {/* Secure Application Routes */}
-          <Route path="/" element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/complaints" element={
-            <ProtectedRoute>
-              <Complaints />
-            </ProtectedRoute>
-          } />
+            {/* Secure Application Routes */}
+            <Route path="/" element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            } />
 
-          <Route path="/complaints/:id" element={
-            <ProtectedRoute>
-              <ComplaintDetail />
-            </ProtectedRoute>
-          } />
+            <Route path="/complaints" element={
+              <ProtectedRoute>
+                <Complaints />
+              </ProtectedRoute>
+            } />
 
-          <Route path="/profile" element={
-            <ProtectedRoute>
-              <Profile />
-            </ProtectedRoute>
-          } />
+            <Route path="/complaints/:id" element={
+              <ProtectedRoute>
+                <ComplaintDetail />
+              </ProtectedRoute>
+            } />
 
-          <Route path="/reports" element={
-            <ProtectedRoute>
-              <AdminOrHeadRoute>
-                <Reports />
-              </AdminOrHeadRoute>
-            </ProtectedRoute>
-          } />
+            <Route path="/profile" element={
+              <ProtectedRoute>
+                <Profile />
+              </ProtectedRoute>
+            } />
 
-          <Route path="/users" element={
-            <ProtectedRoute>
-              <AdminRoute>
-                <Users />
-              </AdminRoute>
-            </ProtectedRoute>
-          } />
+            <Route path="/reports" element={
+              <ProtectedRoute>
+                <AdminOrHeadRoute>
+                  <Reports />
+                </AdminOrHeadRoute>
+              </ProtectedRoute>
+            } />
 
-          <Route path="/audit-logs" element={
-            <ProtectedRoute>
-              <AdminRoute>
-                <AuditLogs />
-              </AdminRoute>
-            </ProtectedRoute>
-          } />
+            <Route path="/users" element={
+              <ProtectedRoute>
+                <AdminRoute>
+                  <Users />
+                </AdminRoute>
+              </ProtectedRoute>
+            } />
 
-          <Route path="/settings" element={
-            <ProtectedRoute>
-              <AdminRoute>
-                <Settings />
-              </AdminRoute>
-            </ProtectedRoute>
-          } />
+            <Route path="/audit-logs" element={
+              <ProtectedRoute>
+                <AdminRoute>
+                  <AuditLogs />
+                </AdminRoute>
+              </ProtectedRoute>
+            } />
 
-          {/* Fallback routing redirection */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Router>
+            <Route path="/settings" element={
+              <ProtectedRoute>
+                <AdminRoute>
+                  <Settings />
+                </AdminRoute>
+              </ProtectedRoute>
+            } />
+
+            {/* Fallback routing redirection */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Router>
+      </SocketProvider>
     </AuthProvider>
   );
 }

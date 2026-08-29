@@ -985,6 +985,14 @@ const addComment = async (req, res) => {
       }
     }
 
+    // Emit real-time comment notification event
+    try {
+      const { emitCommentCreated } = require('../utils/socket');
+      emitCommentCreated(result.rows[0], user);
+    } catch (socketErr) {
+      console.error('Socket emission failed for comment creation:', socketErr.message);
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Comment added successfully',

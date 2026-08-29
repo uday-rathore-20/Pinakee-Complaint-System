@@ -105,10 +105,21 @@ PINakee Support Team`;
     const dbPool = require('../config/db');
     if (!dbPool) return;
     try {
-      await dbPool.query(`
+      const res = await dbPool.query(`
         INSERT INTO in_app_notifications (user_id, complaint_id, type, title, message)
         VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
       `, [userId, complaintId || null, type, title, message]);
+
+      const notification = res.rows[0];
+
+      // Emit private WebSocket notification event
+      try {
+        const { emitNotificationNew } = require('./socket');
+        emitNotificationNew(userId, notification);
+      } catch (socketErr) {
+        console.error('Socket notification emission failed:', socketErr.message);
+      }
     } catch (err) {
       console.error('Failed to create in-app notification:', err.message);
     }

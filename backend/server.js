@@ -178,6 +178,10 @@ const server = app.listen(PORT, () => {
   startSlaScheduler(60000);
 });
 
+// Initialize Socket.IO engine
+const { initSocket } = require('./utils/socket');
+initSocket(server);
+
 // Graceful shutdown handling
 process.on('SIGINT', () => {
   logger.info('SIGINT signal received: closing HTTP server');

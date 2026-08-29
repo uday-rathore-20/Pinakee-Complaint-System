@@ -1,10 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useSocket } from '../context/SocketContext';
 
 const ComplaintDetail = () => {
   const { id } = useParams();
   const { user, authFetch } = useAuth();
+  const socket = useSocket();
+
+  // Socket.IO real-time comments room integration
+  useEffect(() => {
+    if (!socket || !id) return;
+
+    socket.emit('join_complaint_room', { complaintId: parseInt(id, 10) });
+
+    const handleNewComment = (newComment) => {
+      setComments(prev => {
+        if (prev.some(c => c.id === newComment.id)) return prev;
+        return [...prev, newComment];
+      });
+    };
+
+    socket.on('comment:created', handleNewComment);
+
+    return () => {
+      socket.off('comment:created', handleNewComment);
+      socket.emit('leave_complaint_room', { complaintId: parseInt(id, 10) });
+    };
+  }, [socket, id]);
 
   // Data States
   const [complaint, setComplaint] = useState(null);

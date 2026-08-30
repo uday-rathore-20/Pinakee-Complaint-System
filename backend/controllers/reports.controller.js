@@ -83,7 +83,9 @@ const getTicketsByDepartment = async (req, res) => {
     }
 
     const query = `
-      SELECT d.name AS department, COUNT(c.id)::int AS count
+      SELECT d.name AS department,
+             COUNT(c.id)::int AS count,
+             COUNT(CASE WHEN c.is_escalated = TRUE THEN 1 END)::int AS escalated_count
       FROM departments d
       LEFT JOIN complaints c ON c.department_id = d.id
       GROUP BY d.name
@@ -153,12 +155,13 @@ const getSlaCompliance = async (req, res) => {
     const statsQuery = `
       SELECT
         COUNT(*)::int AS total_complaints,
-        COUNT(CASE WHEN is_sla_breached = TRUE THEN 1 END)::int AS breached_count
+        COUNT(CASE WHEN is_sla_breached = TRUE THEN 1 END)::int AS breached_count,
+        COUNT(CASE WHEN is_escalated = TRUE THEN 1 END)::int AS escalated_count
       FROM complaints
       ${queryScopeClause}
     `;
     const statsResult = await dbPool.query(statsQuery, queryScopeParams);
-    const { total_complaints, breached_count } = statsResult.rows[0];
+    const { total_complaints, breached_count, escalated_count } = statsResult.rows[0];
 
     const compliance_rate = total_complaints > 0
       ? parseFloat(((1 - (breached_count / total_complaints)) * 100).toFixed(1))
@@ -207,6 +210,7 @@ const getSlaCompliance = async (req, res) => {
       data: {
         total_complaints,
         breached_count,
+        escalated_count,
         compliance_rate,
         avg_assignment_hours,
         avg_resolution_hours

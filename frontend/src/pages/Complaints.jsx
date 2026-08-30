@@ -4,14 +4,14 @@ import { useAuth } from '../context/AuthContext';
 
 const Complaints = () => {
   const { user, authFetch } = useAuth();
-  
+
   // Data States
   const [complaints, setComplaints] = useState([]);
   const [categories, setCategories] = useState([]);
   const [priorities, setPriorities] = useState([]);
   const [statuses, setStatuses] = useState([]);
   const [departments, setDepartments] = useState([]);
-  
+
   // Active queue for AGENT (defaults to 'my')
   const [activeQueue, setActiveQueue] = useState('my');
 
@@ -20,13 +20,14 @@ const Complaints = () => {
   const [filterPriority, setFilterPriority] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterOverdue, setFilterOverdue] = useState('');
+  const [filterEscalated, setFilterEscalated] = useState('');
   const [search, setSearch] = useState('');
-  
+
   // Pagination States
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const limit = 10;
-  
+
   // Modal & Form States
   const [showModal, setShowModal] = useState(false);
   const [formTitle, setFormTitle] = useState('');
@@ -34,7 +35,7 @@ const Complaints = () => {
   const [formCat, setFormCat] = useState('');
   const [formPri, setFormPri] = useState('');
   const [formDept, setFormDept] = useState('');
-  
+
   const [loading, setLoading] = useState(true);
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -47,7 +48,7 @@ const Complaints = () => {
       const priRes = await authFetch('/priorities');
       const statusRes = await authFetch('/statuses');
       const deptRes = await authFetch('/departments');
-      
+
       const categoriesResult = await catRes.json();
       const prioritiesResult = await priRes.json();
       const statusesResult = await statusRes.json();
@@ -73,6 +74,7 @@ const Complaints = () => {
       if (filterPriority) params.push(`priority=${filterPriority}`);
       if (filterCategory) params.push(`category=${filterCategory}`);
       if (filterOverdue) params.push(`overdue=${filterOverdue}`);
+      if (filterEscalated) params.push(`escalated=${filterEscalated}`);
       if (search.trim()) params.push(`search=${encodeURIComponent(search.trim())}`);
       params.push(`limit=${limit}`);
       params.push(`offset=${currentOffset}`);
@@ -159,7 +161,7 @@ const Complaints = () => {
   useEffect(() => {
     setOffset(0);
     fetchComplaints(0);
-  }, [filterStatus, filterPriority, filterCategory, filterOverdue, activeQueue]);
+  }, [filterStatus, filterPriority, filterCategory, filterOverdue, filterEscalated, activeQueue]);
 
   const handleCreateComplaint = async (e) => {
     e.preventDefault();
@@ -184,7 +186,7 @@ const Complaints = () => {
         })
       });
       const result = await res.json();
-      
+
       if (res.ok && result.success) {
         // Reset form and close modal
         setFormTitle('');
@@ -320,6 +322,20 @@ const Complaints = () => {
                 <option value="true">Overdue / Breached</option>
               </select>
             </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Escalation State</span>
+              <select
+                className="form-input"
+                style={{ padding: '0.4rem 0.8rem' }}
+                value={filterEscalated}
+                onChange={(e) => setFilterEscalated(e.target.value)}
+              >
+                <option value="">All Tickets</option>
+                <option value="true">Escalated</option>
+                <option value="false">Non-Escalated</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -349,7 +365,7 @@ const Complaints = () => {
                   const dateStr = new Date(ticket.created_at).toLocaleDateString();
                   const statusKey = ticket.status.toLowerCase().replace(/ /g, '-');
                   const priorityKey = ticket.priority.toLowerCase();
-                  
+
                   return (
                     <tr key={ticket.id}>
                       <td>
@@ -357,7 +373,28 @@ const Complaints = () => {
                           {ticket.ticket_number}
                         </Link>
                       </td>
-                      <td><strong>{ticket.title}</strong></td>
+                      <td>
+                        <strong>{ticket.title}</strong>
+                        {ticket.is_escalated && (
+                          <span
+                            className="badge badge-danger"
+                            style={{
+                              marginLeft: '0.5rem',
+                              fontSize: '0.65rem',
+                              background: '#ef4444',
+                              color: '#fff',
+                              padding: '0.15rem 0.35rem',
+                              borderRadius: '4px',
+                              fontWeight: 'bold',
+                              display: 'inline-flex',
+                              alignItems: 'center'
+                            }}
+                            title={`Escalation Level: ${ticket.escalation_level}`}
+                          >
+                            🚨 Escalated (Lv.{ticket.escalation_level})
+                          </span>
+                        )}
+                      </td>
                       <td>{ticket.creator_first_name} {ticket.creator_last_name}</td>
                       <td>{ticket.category}</td>
                       <td>
@@ -440,9 +477,9 @@ const Complaints = () => {
                 &times;
               </button>
             </div>
-            
+
             {formError && <div className="alert alert-danger">{formError}</div>}
-            
+
             <form onSubmit={handleCreateComplaint}>
               <div className="form-group">
                 <label className="form-label">Subject Title</label>

@@ -7,21 +7,21 @@ const { routeTicket } = require('../utils/routingEngine');
  */
 const generateTicketNumber = async () => {
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  
+
   // To guarantee uniqueness, generate and verify against DB
   let isUnique = false;
   let ticketNumber = '';
-  
+
   while (!isUnique) {
     const randomStr = Math.floor(1000 + Math.random() * 9000).toString();
     ticketNumber = `PIN-${dateStr}-${randomStr}`;
-    
+
     const result = await dbPool.query('SELECT id FROM complaints WHERE ticket_number = $1', [ticketNumber]);
     if (result.rows.length === 0) {
       isUnique = true;
     }
   }
-  
+
   return ticketNumber;
 };
 
@@ -41,7 +41,7 @@ const verifyComplaintAccess = (user, complaint) => {
  * GET /api/complaints
  */
 const getComplaints = async (req, res) => {
-  const { status, priority, category, department, search, limit, offset, overdue } = req.query;
+  const { status, priority, category, department, search, limit, offset, overdue, escalated } = req.query;
   const user = req.user;
 
   try {
@@ -57,18 +57,19 @@ const getComplaints = async (req, res) => {
 
     let query = `
       SELECT c.id, c.ticket_number, c.title, c.description, c.created_at, c.updated_at, c.due_date, c.is_sla_breached,
+             c.is_escalated, c.escalated_at, c.escalation_level,
              u_creator.id AS creator_id, u_creator.first_name AS creator_first_name, u_creator.last_name AS creator_last_name, u_creator.email AS creator_email,
              cc.name AS category, cs.name AS status, cp.name AS priority,
              dept.name AS department, dept.id AS department_id,
              u_assignee.id AS assignee_id, u_assignee.first_name AS assignee_first_name, u_assignee.last_name AS assignee_last_name,
              COUNT(*) OVER() AS total_count
-      FROM complaints c
-      JOIN users u_creator ON c.created_by_id = u_creator.id
-      JOIN complaint_categories cc ON c.category_id = cc.id
-      JOIN complaint_statuses cs ON c.status_id = cs.id
-      JOIN complaint_priorities cp ON c.priority_id = cp.id
-      LEFT JOIN departments dept ON c.department_id = dept.id
-      LEFT JOIN users u_assignee ON c.assigned_to_id = u_assignee.id
+       FROM complaints c
+       JOIN users u_creator ON c.created_by_id = u_creator.id
+       JOIN complaint_categories cc ON c.category_id = cc.id
+       JOIN complaint_statuses cs ON c.status_id = cs.id
+       JOIN complaint_priorities cp ON c.priority_id = cp.id
+       LEFT JOIN departments dept ON c.department_id = dept.id
+       LEFT JOIN users u_assignee ON c.assigned_to_id = u_assignee.id
     `;
 
     const whereClauses = [];
@@ -134,6 +135,13 @@ const getComplaints = async (req, res) => {
     // Map overdue filter
     if (overdue === 'true') {
       whereClauses.push(`(c.is_sla_breached = TRUE OR (c.due_date < CURRENT_TIMESTAMP AND cs.name NOT IN ('Resolved', 'Closed')))`);
+    }
+
+    // Map escalated filter
+    if (escalated === 'true') {
+      whereClauses.push('c.is_escalated = TRUE');
+    } else if (escalated === 'false') {
+      whereClauses.push('c.is_escalated = FALSE');
     }
 
     // Map department filter
@@ -434,9 +442,9 @@ const updateComplaint = async (req, res) => {
 
     // Fetch complaint
     const checkQuery = `
-      SELECT c.*, cs.name AS status 
-      FROM complaints c 
-      JOIN complaint_statuses cs ON c.status_id = cs.id 
+      SELECT c.*, cs.name AS status
+      FROM complaints c
+      JOIN complaint_statuses cs ON c.status_id = cs.id
       WHERE c.id = $1
     `;
     const checkResult = await dbPool.query(checkQuery, [id]);
@@ -506,9 +514,9 @@ const updateComplaint = async (req, res) => {
 
     values.push(id);
     const updateQuery = `
-      UPDATE complaints 
-      SET ${updateFields.join(', ')} 
-      WHERE id = $${values.length} 
+      UPDATE complaints
+      SET ${updateFields.join(', ')}
+      WHERE id = $${values.length}
       RETURNING *
     `;
     const updateResult = await dbPool.query(updateQuery, values);
@@ -542,7 +550,7 @@ const assignComplaint = async (req, res) => {
 
     // Retrieve complaint joining priority details
     const compCheck = await dbPool.query(`
-      SELECT c.*, cp.name AS priority 
+      SELECT c.*, cp.name AS priority
       FROM complaints c
       LEFT JOIN complaint_priorities cp ON c.priority_id = cp.id
       WHERE c.id = $1
@@ -573,9 +581,9 @@ const assignComplaint = async (req, res) => {
 
     if (assigned_to_id) {
       const userResult = await dbPool.query(`
-        SELECT u.id, r.name AS role, u.department_id 
-        FROM users u 
-        JOIN roles r ON u.role_id = r.id 
+        SELECT u.id, r.name AS role, u.department_id
+        FROM users u
+        JOIN roles r ON u.role_id = r.id
         WHERE u.id = $1 AND u.is_active = true
       `, [assigned_to_id]);
 
@@ -602,7 +610,7 @@ const assignComplaint = async (req, res) => {
     // Check if assignment triggers automatic status change from "Pending" to "Assigned"
     const pendingStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Pending'");
     const assignedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Assigned'");
-    
+
     const pendingId = pendingStatusResult.rows[0]?.id;
     const assignedId = assignedStatusResult.rows[0]?.id;
 
@@ -868,9 +876,9 @@ const updateComplaintStatus = async (req, res) => {
 
     // Execute state transition
     const updateResult = await dbPool.query(`
-      UPDATE complaints 
+      UPDATE complaints
       SET status_id = $1
-      WHERE id = $2 
+      WHERE id = $2
       RETURNING *
     `, [status_id, id]);
 
@@ -1053,7 +1061,7 @@ const exportComplaints = async (req, res) => {
     for (const row of result.rows) {
       const creatorName = `${row.creator_first_name} ${row.creator_last_name}`;
       const assigneeName = row.assignee_first_name ? `${row.assignee_first_name} ${row.assignee_last_name}` : 'Unassigned';
-      
+
       const csvRow = [
         escapeCSV(row.ticket_number),
         escapeCSV(row.title),

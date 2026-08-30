@@ -220,6 +220,15 @@ const Reports = () => {
                 Out of {slaMetrics?.total_complaints || 0} complaints
               </div>
             </div>
+            <div className="card stat-card" style={{ borderLeft: '4px solid #b91c1c' }}>
+              <div className="label">Active Escalations</div>
+              <div className="value" style={{ color: '#b91c1c' }}>
+                {slaMetrics?.escalated_count || 0}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                Reassigned to managers
+              </div>
+            </div>
             <div className="card stat-card" style={{ borderLeft: '4px solid #10b981' }}>
               <div className="label">Avg Assignment Time</div>
               <div className="value" style={{ color: '#10b981' }}>
@@ -460,7 +469,12 @@ const Reports = () => {
                       <div key={index} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: '#f8fafc', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
                           <strong>{item.department || 'General'}</strong>
-                          <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{item.count} tickets</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{item.count} tickets</span>
+                            {item.escalated_count > 0 && (
+                              <span style={{ color: '#ef4444', fontSize: '0.75rem', fontWeight: 'bold' }}>🚨 {item.escalated_count} escalated</span>
+                            )}
+                          </div>
                         </div>
                         <div style={{ background: '#e2e8f0', height: '0.85rem', borderRadius: '3px', overflow: 'hidden', marginTop: '0.25rem' }}>
                           <div

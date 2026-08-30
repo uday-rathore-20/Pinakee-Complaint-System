@@ -94,6 +94,18 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/audit-logs', auditLogsRoutes);
 app.use('/api/settings', settingsRoutes);
 
+if (process.env.NODE_ENV === 'test') {
+  app.post('/api/test/run-sla', async (req, res) => {
+    try {
+      const { checkSlaBreaches } = require('./utils/slaScheduler');
+      await checkSlaBreaches();
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+}
+
 // Root route (friendly greeting) - Dev only
 if (process.env.NODE_ENV !== 'production') {
   app.get('/', (req, res) => {
@@ -142,7 +154,7 @@ if (process.env.NODE_ENV === 'production') {
   const path = require('path');
   const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
   app.use(express.static(frontendDistPath));
-  
+
   // SPA routing fallback: route non-API requests to index.html
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/')) {
@@ -160,7 +172,7 @@ app.all('/api/*', (req, res) => {
 // Centralized Error Handling Middleware (hides stack traces in production)
 app.use((err, req, res, next) => {
   logger.error('Unhandled Error:', { message: err.message, stack: err.stack });
-  
+
   const isProduction = process.env.NODE_ENV === 'production';
   return res.status(err.status || 500).json({
     success: false,

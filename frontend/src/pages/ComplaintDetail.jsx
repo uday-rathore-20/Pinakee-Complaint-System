@@ -641,6 +641,34 @@ const ComplaintDetail = () => {
         </div>
       </div>
 
+      {complaint.is_escalated && (
+        <div
+          className="alert alert-danger"
+          style={{
+            marginBottom: '1.5rem',
+            background: '#fee2e2',
+            border: '1px solid #fca5a5',
+            color: '#991b1b',
+            padding: '1rem',
+            borderRadius: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem'
+          }}
+        >
+          <span style={{ fontSize: '1.5rem' }}>🚨</span>
+          <div>
+            <h4 style={{ margin: 0, fontWeight: 'bold' }}>SLA Escalation Triggered (Level {complaint.escalation_level})</h4>
+            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem' }}>
+              This ticket exceeded its resolution timeline limit and was auto-escalated on <strong>{new Date(complaint.escalated_at).toLocaleString()}</strong>.
+              {complaint.assignee_first_name && (
+                <span> It has been reassigned to manager: <strong>{complaint.assignee_first_name} {complaint.assignee_last_name}</strong>.</span>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
       {actionError && <div className="alert alert-danger">{actionError}</div>}
 
       <div className="section-grid">

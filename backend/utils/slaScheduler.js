@@ -15,7 +15,7 @@ const checkSlaBreaches = async () => {
       FROM complaints c
       JOIN complaint_statuses cs ON c.status_id = cs.id
       WHERE c.is_sla_breached = FALSE
-        AND cs.name NOT IN ('Resolved', 'Closed')
+        AND cs.name NOT IN ('Resolved', 'Closed', 'On Hold', 'Waiting on Customer')
         AND c.due_date < CURRENT_TIMESTAMP
     `;
     const result = await dbPool.query(query);
@@ -35,7 +35,7 @@ const checkSlaBreaches = async () => {
             WHERE c.id = $1 FOR UPDATE
           `;
           const checkRes = await client.query(checkQuery, [complaint.id]);
-          if (checkRes.rows.length === 0 || checkRes.rows[0].is_sla_breached || ['Resolved', 'Closed'].includes(checkRes.rows[0].status)) {
+          if (checkRes.rows.length === 0 || checkRes.rows[0].is_sla_breached || ['Resolved', 'Closed', 'On Hold', 'Waiting on Customer'].includes(checkRes.rows[0].status)) {
             client.release();
             continue;
           }
@@ -82,7 +82,7 @@ const checkSlaBreaches = async () => {
       JOIN complaint_priorities cp ON c.priority_id = cp.id
       WHERE c.is_sla_breached = TRUE
         AND c.is_escalated = FALSE
-        AND cs.name NOT IN ('Resolved', 'Closed')
+        AND cs.name NOT IN ('Resolved', 'Closed', 'On Hold', 'Waiting on Customer')
     `;
     const escResult = await dbPool.query(escalationQuery);
 
@@ -101,7 +101,7 @@ const checkSlaBreaches = async () => {
             WHERE c.id = $1 FOR UPDATE
           `;
           const checkRes = await client.query(checkQuery, [complaint.id]);
-          if (checkRes.rows.length === 0 || checkRes.rows[0].is_escalated || ['Resolved', 'Closed'].includes(checkRes.rows[0].status_name)) {
+          if (checkRes.rows.length === 0 || checkRes.rows[0].is_escalated || ['Resolved', 'Closed', 'On Hold', 'Waiting on Customer'].includes(checkRes.rows[0].status_name)) {
             client.release();
             continue;
           }

@@ -3,6 +3,24 @@ import { useParams, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 
+const formatPausedDuration = (duration) => {
+  if (!duration) return '0s';
+  if (typeof duration === 'string') {
+    return duration;
+  }
+  if (typeof duration === 'object') {
+    const parts = [];
+    if (duration.years) parts.push(`${duration.years}y`);
+    if (duration.months) parts.push(`${duration.months}m`);
+    if (duration.days) parts.push(`${duration.days}d`);
+    if (duration.hours) parts.push(`${duration.hours}h`);
+    if (duration.minutes) parts.push(`${duration.minutes}m`);
+    if (duration.seconds) parts.push(`${duration.seconds}s`);
+    return parts.length > 0 ? parts.join(' ') : '0s';
+  }
+  return String(duration);
+};
+
 const ComplaintDetail = () => {
   const { id } = useParams();
   const { user, authFetch } = useAuth();
@@ -366,14 +384,28 @@ const ComplaintDetail = () => {
             allowed.push(...statuses.filter(s => s.name === 'Closed'));
           }
         } else if (user.role === 'AGENT') {
-          if (complaint.assigned_to_id === user.id && current === 'Assigned') {
-            allowed.push(...statuses.filter(s => s.name === 'In Progress'));
+          if (complaint.assigned_to_id === user.id) {
+            if (current === 'Assigned') {
+              allowed.push(...statuses.filter(s => s.name === 'In Progress'));
+            }
+            if (['In Progress', 'Assigned'].includes(current)) {
+              allowed.push(...statuses.filter(s => ['On Hold', 'Waiting on Customer'].includes(s.name)));
+            }
+            if (['On Hold', 'Waiting on Customer'].includes(current)) {
+              allowed.push(...statuses.filter(s => s.name === 'In Progress'));
+            }
           }
         } else if (user.role === 'ADMIN' || (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id)) {
           if (current === 'Assigned') {
             allowed.push(...statuses.filter(s => s.name === 'In Progress'));
           } else if (current === 'Resolved') {
             allowed.push(...statuses.filter(s => s.name === 'Closed'));
+          }
+          if (['In Progress', 'Assigned'].includes(current)) {
+            allowed.push(...statuses.filter(s => ['On Hold', 'Waiting on Customer'].includes(s.name)));
+          }
+          if (['On Hold', 'Waiting on Customer'].includes(current)) {
+            allowed.push(...statuses.filter(s => ['In Progress', 'Assigned'].includes(s.name)));
           }
         }
       }
@@ -609,14 +641,28 @@ const ComplaintDetail = () => {
           allowedOptions.push(...statuses.filter(s => s.name === 'Closed'));
         }
       } else if (user.role === 'AGENT') {
-        if (complaint.assigned_to_id === user.id && current === 'Assigned') {
-          allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
+        if (complaint.assigned_to_id === user.id) {
+          if (current === 'Assigned') {
+            allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
+          }
+          if (['In Progress', 'Assigned'].includes(current)) {
+            allowedOptions.push(...statuses.filter(s => ['On Hold', 'Waiting on Customer'].includes(s.name)));
+          }
+          if (['On Hold', 'Waiting on Customer'].includes(current)) {
+            allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
+          }
         }
       } else if (user.role === 'ADMIN' || (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id)) {
         if (current === 'Assigned') {
           allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
         } else if (current === 'Resolved') {
           allowedOptions.push(...statuses.filter(s => s.name === 'Closed'));
+        }
+        if (['In Progress', 'Assigned'].includes(current)) {
+          allowedOptions.push(...statuses.filter(s => ['On Hold', 'Waiting on Customer'].includes(s.name)));
+        }
+        if (['On Hold', 'Waiting on Customer'].includes(current)) {
+          allowedOptions.push(...statuses.filter(s => ['In Progress', 'Assigned'].includes(s.name)));
         }
       }
     }
@@ -663,6 +709,34 @@ const ComplaintDetail = () => {
               This ticket exceeded its resolution timeline limit and was auto-escalated on <strong>{new Date(complaint.escalated_at).toLocaleString()}</strong>.
               {complaint.assignee_first_name && (
                 <span> It has been reassigned to manager: <strong>{complaint.assignee_first_name} {complaint.assignee_last_name}</strong>.</span>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {complaint.paused_at && (
+        <div
+          className="alert alert-warning"
+          style={{
+            marginBottom: '1.5rem',
+            background: '#fffbeb',
+            border: '1px solid #fde68a',
+            color: '#92400e',
+            padding: '1rem',
+            borderRadius: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem'
+          }}
+        >
+          <span style={{ fontSize: '1.5rem' }}>⏸️</span>
+          <div>
+            <h4 style={{ margin: 0, fontWeight: 'bold' }}>SLA Timer Paused ({complaint.status})</h4>
+            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem' }}>
+              Resolution countdown is suspended since <strong>{new Date(complaint.paused_at).toLocaleString()}</strong>.
+              {complaint.total_paused_duration && (
+                <span> Total paused duration accumulated: <strong>{formatPausedDuration(complaint.total_paused_duration)}</strong>.</span>
               )}
             </p>
           </div>
@@ -1105,15 +1179,29 @@ const ComplaintDetail = () => {
                   <strong>{new Date(complaint.due_date).toLocaleString()}</strong>
                   <div style={{ marginTop: '0.25rem' }}>
                     {complaint.status === 'Resolved' || complaint.status === 'Closed' ? (
-                      <span className="badge badge-success" style={{ fontSize: '0.75rem' }}>SATISFIED</span>
+                       <span className="badge badge-success" style={{ fontSize: '0.75rem' }}>SATISFIED</span>
+                    ) : complaint.paused_at ? (
+                       <span className="badge badge-warning" style={{ fontSize: '0.75rem', backgroundColor: '#fef3c7', color: '#d97706' }}>PAUSED</span>
                     ) : new Date(complaint.due_date) < new Date() ? (
-                      <span className="badge badge-danger" style={{ fontSize: '0.75rem' }}>OVERDUE</span>
+                       <span className="badge badge-danger" style={{ fontSize: '0.75rem' }}>OVERDUE</span>
                     ) : (
                       <span className="badge badge-warning" style={{ fontSize: '0.75rem' }}>
                         Due in {Math.ceil((new Date(complaint.due_date) - new Date()) / (1000 * 60 * 60))} hours
                       </span>
                     )}
                   </div>
+                </li>
+              )}
+              {complaint.paused_at && (
+                <li>
+                  <span style={{ color: 'var(--text-muted)' }}>Paused At:</span>{' '}
+                  <strong>{new Date(complaint.paused_at).toLocaleString()}</strong>
+                </li>
+              )}
+              {complaint.total_paused_duration && (
+                <li>
+                  <span style={{ color: 'var(--text-muted)' }}>Total Paused Time:</span>{' '}
+                  <strong>{formatPausedDuration(complaint.total_paused_duration)}</strong>
                 </li>
               )}
             </ul>

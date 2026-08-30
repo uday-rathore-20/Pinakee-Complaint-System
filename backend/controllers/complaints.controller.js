@@ -31,7 +31,10 @@ const generateTicketNumber = async () => {
 const verifyComplaintAccess = (user, complaint) => {
   if (user.role === 'ADMIN') return true;
   if (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id) return true;
-  if (user.role === 'AGENT' && complaint.assigned_to_id === user.id) return true;
+  if (user.role === 'AGENT') {
+    if (complaint.assigned_to_id === user.id) return true;
+    if (complaint.assigned_to_id === null && complaint.department_id === user.department_id) return true;
+  }
   if (user.role === 'CUSTOMER' && complaint.created_by_id === user.id) return true;
   return false;
 };
@@ -832,6 +835,9 @@ const updateComplaintStatus = async (req, res) => {
     const current = complaint.current_status_name;
     const target = targetStatus.name;
 
+    const isCurrentPaused = ['On Hold', 'Waiting on Customer'].includes(current);
+    const isTargetPaused = ['On Hold', 'Waiting on Customer'].includes(target);
+
     // Terminal state protection: Closed complaints cannot be transitioned
     if (current === 'Closed') {
       return res.status(400).json({ success: false, message: 'Closed tickets cannot be modified' });
@@ -839,6 +845,12 @@ const updateComplaintStatus = async (req, res) => {
 
     // Role-specific transition matrix
     if (user.role === 'CUSTOMER') {
+      if (target === 'On Hold' || target === 'Waiting on Customer') {
+        return res.status(403).json({ success: false, message: 'Forbidden: Customers cannot pause ticket SLA' });
+      }
+      if (isCurrentPaused) {
+        return res.status(403).json({ success: false, message: 'Forbidden: Customers cannot transition tickets from paused states' });
+      }
       if (target !== 'Closed') {
         return res.status(403).json({ success: false, message: 'Customers are only permitted to transition tickets to Closed' });
       }
@@ -849,67 +861,141 @@ const updateComplaintStatus = async (req, res) => {
       if (complaint.assigned_to_id !== user.id) {
         return res.status(403).json({ success: false, message: 'Forbidden: You can only update the status of tickets assigned to you' });
       }
-      if (target !== 'In Progress') {
-        return res.status(400).json({ success: false, message: 'Agents can only transition tickets to In Progress. Resolved status must be achieved via FCR submission.' });
-      }
-      if (current !== 'Assigned') {
-        return res.status(400).json({ success: false, message: 'Tickets can only be moved to In Progress from Assigned status' });
+
+      if (isTargetPaused) {
+        // Pausing
+        if (!['In Progress', 'Assigned'].includes(current)) {
+          return res.status(400).json({ success: false, message: 'Tickets can only be placed on hold from In Progress or Assigned status' });
+        }
+      } else if (isCurrentPaused) {
+        // Resuming
+        if (target !== 'In Progress') {
+          return res.status(400).json({ success: false, message: 'Agents can only resume tickets to In Progress status' });
+        }
+      } else {
+        // Normal active transitions (e.g. Assigned -> In Progress)
+        if (target !== 'In Progress') {
+          return res.status(400).json({ success: false, message: 'Agents can only transition tickets to In Progress. Resolved status must be achieved via FCR submission.' });
+        }
+        if (current !== 'Assigned') {
+          return res.status(400).json({ success: false, message: 'Tickets can only be moved to In Progress from Assigned status' });
+        }
       }
     } else {
       // ADMIN or DEPT_HEAD manual transitions
-      if (target === 'Resolved') {
-        return res.status(400).json({ success: false, message: 'Manual transition to Resolved is blocked. Tickets must be resolved via FCR submission.' });
-      }
-      if (target === 'In Progress' && current !== 'Assigned') {
-        return res.status(400).json({ success: false, message: 'Tickets can only be moved to In Progress from Assigned status' });
-      }
-      if (target === 'Closed' && current !== 'Resolved') {
-        return res.status(400).json({ success: false, message: 'Tickets can only be closed from Resolved status' });
-      }
-      if (target === 'Pending') {
-        return res.status(400).json({ success: false, message: 'Cannot transition ticket back to Pending status' });
-      }
-      if (target === 'Assigned') {
-        return res.status(400).json({ success: false, message: 'Assigned status is automatically handled via assignment routing' });
-      }
-    }
-
-    // Execute state transition
-    const updateResult = await dbPool.query(`
-      UPDATE complaints
-      SET status_id = $1
-      WHERE id = $2
-      RETURNING *
-    `, [status_id, id]);
-
-    // Log in status history audit
-    const defaultRemarks = `Status changed from '${complaint.current_status_name}' to '${targetStatus.name}'`;
-    await dbPool.query(`
-      INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [id, user.id, complaint.status_id, status_id, remarks ? remarks.trim() : defaultRemarks]);
-
-    const notifications = require('../utils/notifications');
-    notifications.notifyStatusChanged(complaint, complaint.current_status_name, targetStatus.name).catch(err => console.error('Failed to trigger status change notification:', err));
-
-    // Send resolution notification to creator if new status is Resolved
-    if (targetStatus.name === 'Resolved') {
-      const creatorResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.created_by_id]);
-      if (creatorResult.rows.length > 0) {
-        const creatorUser = creatorResult.rows[0];
-        const notifications = require('../utils/notifications');
-        notifications.sendResolutionNotification({
-          ticket_number: updateResult.rows[0].ticket_number,
-          title: updateResult.rows[0].title
-        }, creatorUser).catch(err => console.error('Failed to dispatch resolution email:', err));
+      if (isTargetPaused) {
+        if (!['In Progress', 'Assigned'].includes(current)) {
+          return res.status(400).json({ success: false, message: 'Tickets can only be placed on hold from In Progress or Assigned status' });
+        }
+      } else if (isCurrentPaused) {
+        if (target !== 'In Progress' && target !== 'Assigned') {
+          return res.status(400).json({ success: false, message: 'Paused tickets can only be resumed to In Progress or Assigned status' });
+        }
+      } else {
+        // Normal active transitions
+        if (target === 'Resolved') {
+          return res.status(400).json({ success: false, message: 'Manual transition to Resolved is blocked. Tickets must be resolved via FCR submission.' });
+        }
+        if (target === 'In Progress' && current !== 'Assigned') {
+          return res.status(400).json({ success: false, message: 'Tickets can only be moved to In Progress from Assigned status' });
+        }
+        if (target === 'Closed' && current !== 'Resolved') {
+          return res.status(400).json({ success: false, message: 'Tickets can only be closed from Resolved status' });
+        }
+        if (target === 'Pending') {
+          return res.status(400).json({ success: false, message: 'Cannot transition ticket back to Pending status' });
+        }
+        if (target === 'Assigned') {
+          return res.status(400).json({ success: false, message: 'Assigned status is automatically handled via assignment routing' });
+        }
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      message: `Complaint status updated to '${targetStatus.name}'`,
-      data: updateResult.rows[0]
-    });
+    // Execute state transition atomically inside a transaction block
+    const client = await dbPool.connect();
+    let resultComplaint = null;
+
+    try {
+      await client.query('BEGIN');
+
+      let updateQuery = '';
+      let queryParams = [];
+
+      if (isTargetPaused && !isCurrentPaused) {
+        // Transitioning INTO paused status (On Hold / Waiting on Customer)
+        updateQuery = `
+          UPDATE complaints
+          SET status_id = $1,
+              paused_at = COALESCE(paused_at, CURRENT_TIMESTAMP),
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+          RETURNING *
+        `;
+        queryParams = [status_id, id];
+      } else if (isCurrentPaused && !isTargetPaused) {
+        // Transitioning FROM paused status to active status
+        updateQuery = `
+          UPDATE complaints
+          SET status_id = $1,
+              total_paused_duration = total_paused_duration + (CURRENT_TIMESTAMP - paused_at),
+              due_date = due_date + (CURRENT_TIMESTAMP - paused_at),
+              paused_at = NULL,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+          RETURNING *
+        `;
+        queryParams = [status_id, id];
+      } else {
+        // Normal non-pause-state updates
+        updateQuery = `
+          UPDATE complaints
+          SET status_id = $1,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+          RETURNING *
+        `;
+        queryParams = [status_id, id];
+      }
+
+      const updateResult = await client.query(updateQuery, queryParams);
+      resultComplaint = updateResult.rows[0];
+
+      // Log in status history audit
+      const defaultRemarks = `Status changed from '${complaint.current_status_name}' to '${targetStatus.name}'`;
+      await client.query(`
+        INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [id, user.id, complaint.status_id, status_id, remarks ? remarks.trim() : defaultRemarks]);
+
+      await client.query('COMMIT');
+      client.release();
+
+      const notifications = require('../utils/notifications');
+      notifications.notifyStatusChanged(complaint, complaint.current_status_name, targetStatus.name)
+        .catch(err => console.error('Failed to trigger status change notification:', err));
+
+      // Send resolution notification to creator if new status is Resolved
+      if (targetStatus.name === 'Resolved') {
+        const creatorResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.created_by_id]);
+        if (creatorResult.rows.length > 0) {
+          const creatorUser = creatorResult.rows[0];
+          notifications.sendResolutionNotification({
+            ticket_number: resultComplaint.ticket_number,
+            title: resultComplaint.title
+          }, creatorUser).catch(err => console.error('Failed to dispatch resolution email:', err));
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Complaint status updated to '${targetStatus.name}'`,
+        data: resultComplaint
+      });
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      client.release();
+      throw txErr;
+    }
   } catch (error) {
     console.error('Update status error:', error.message);
     return res.status(500).json({ success: false, message: 'Failed to update complaint status' });
@@ -934,8 +1020,14 @@ const addComment = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
     }
 
-    // Check if complaint exists
-    const compCheck = await dbPool.query('SELECT * FROM complaints WHERE id = $1', [id]);
+    // Check if complaint exists joining the status name
+    const compCheck = await dbPool.query(`
+      SELECT c.*, cs.name AS current_status_name
+      FROM complaints c
+      JOIN complaint_statuses cs ON c.status_id = cs.id
+      WHERE c.id = $1
+    `, [id]);
+
     if (compCheck.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Complaint not found' });
     }
@@ -953,20 +1045,87 @@ const addComment = async (req, res) => {
       targetIsInternal = false;
     }
 
-    // Insert comment
-    const result = await dbPool.query(`
-      INSERT INTO complaint_comments (complaint_id, user_id, comment_text, is_internal)
-      VALUES ($1, $2, $3, $4)
-      RETURNING *
-    `, [id, user.id, comment_text.trim(), targetIsInternal]);
+    const triggerAutoResume = user.role === 'CUSTOMER' && !targetIsInternal && complaint.current_status_name === 'Waiting on Customer';
 
-    // Send comment notification
-    if (user.id === complaint.created_by_id) {
-      // Customer commented: notify assigned agent (if assigned)
-      if (complaint.assigned_to_id) {
-        const assigneeResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.assigned_to_id]);
-        if (assigneeResult.rows.length > 0) {
-          const assigneeUser = assigneeResult.rows[0];
+    // Start database transaction to execute comment insertion and SLA resume atomically
+    const client = await dbPool.connect();
+    let commentRecord = null;
+    let updatedComplaint = complaint;
+
+    try {
+      await client.query('BEGIN');
+
+      // Insert comment
+      const commentRes = await client.query(`
+        INSERT INTO complaint_comments (complaint_id, user_id, comment_text, is_internal)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+      `, [id, user.id, comment_text.trim(), targetIsInternal]);
+      commentRecord = commentRes.rows[0];
+
+      if (triggerAutoResume) {
+        // Resolve target active status: Assigned if assigned_to_id exists, otherwise In Progress
+        const targetStatusName = complaint.assigned_to_id ? 'Assigned' : 'In Progress';
+        const statusRes = await client.query('SELECT id FROM complaint_statuses WHERE name = $1', [targetStatusName]);
+        const targetStatusId = statusRes.rows[0].id;
+
+        // Perform SLA Resume update on complaints table
+        const updateRes = await client.query(`
+          UPDATE complaints
+          SET status_id = $1,
+              total_paused_duration = total_paused_duration + (CURRENT_TIMESTAMP - paused_at),
+              due_date = due_date + (CURRENT_TIMESTAMP - paused_at),
+              paused_at = NULL,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+          RETURNING *
+        `, [targetStatusId, id]);
+        updatedComplaint = updateRes.rows[0];
+
+        // Fetch old status ID for history log
+        const oldStatusRes = await client.query("SELECT id FROM complaint_statuses WHERE name = 'Waiting on Customer'");
+        const oldStatusId = oldStatusRes.rows[0].id;
+
+        // Log status change in history
+        await client.query(`
+          INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [id, user.id, oldStatusId, targetStatusId, 'SLA Resumed automatically: Customer posted a comment.']);
+      }
+
+      await client.query('COMMIT');
+      client.release();
+
+      // Trigger status changed notifications if auto-resume was triggered
+      if (triggerAutoResume) {
+        const targetStatusName = complaint.assigned_to_id ? 'Assigned' : 'In Progress';
+        const notifications = require('../utils/notifications');
+        notifications.notifyStatusChanged(complaint, complaint.current_status_name, targetStatusName)
+          .catch(err => console.error('Failed to trigger auto-resume status change notification:', err));
+      }
+
+      // Send comment notifications
+      if (user.id === complaint.created_by_id) {
+        // Customer commented: notify assigned agent (if assigned)
+        if (complaint.assigned_to_id) {
+          const assigneeResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.assigned_to_id]);
+          if (assigneeResult.rows.length > 0) {
+            const assigneeUser = assigneeResult.rows[0];
+            const notifications = require('../utils/notifications');
+            notifications.sendCommentNotification({
+              ticket_number: complaint.ticket_number,
+              title: complaint.title
+            }, {
+              author_name: `${user.first_name} ${user.last_name}`,
+              comment_text: comment_text.trim()
+            }, assigneeUser).catch(err => console.error('Failed to notify assignee agent:', err));
+          }
+        }
+      } else if (!targetIsInternal) {
+        // Agent/Staff/Admin posted a public comment: notify customer/creator
+        const creatorResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.created_by_id]);
+        if (creatorResult.rows.length > 0) {
+          const creatorUser = creatorResult.rows[0];
           const notifications = require('../utils/notifications');
           notifications.sendCommentNotification({
             ticket_number: complaint.ticket_number,
@@ -974,38 +1133,28 @@ const addComment = async (req, res) => {
           }, {
             author_name: `${user.first_name} ${user.last_name}`,
             comment_text: comment_text.trim()
-          }, assigneeUser).catch(err => console.error('Failed to notify assignee agent:', err));
+          }, creatorUser).catch(err => console.error('Failed to notify ticket customer:', err));
         }
       }
-    } else if (!targetIsInternal) {
-      // Agent/Staff/Admin posted a public comment: notify customer/creator
-      const creatorResult = await dbPool.query('SELECT first_name, last_name, email FROM users WHERE id = $1', [complaint.created_by_id]);
-      if (creatorResult.rows.length > 0) {
-        const creatorUser = creatorResult.rows[0];
-        const notifications = require('../utils/notifications');
-        notifications.sendCommentNotification({
-          ticket_number: complaint.ticket_number,
-          title: complaint.title
-        }, {
-          author_name: `${user.first_name} ${user.last_name}`,
-          comment_text: comment_text.trim()
-        }, creatorUser).catch(err => console.error('Failed to notify ticket customer:', err));
+
+      // Emit real-time comment notification event
+      try {
+        const { emitCommentCreated } = require('../utils/socket');
+        emitCommentCreated(commentRecord, user);
+      } catch (socketErr) {
+        console.error('Socket emission failed for comment creation:', socketErr.message);
       }
-    }
 
-    // Emit real-time comment notification event
-    try {
-      const { emitCommentCreated } = require('../utils/socket');
-      emitCommentCreated(result.rows[0], user);
-    } catch (socketErr) {
-      console.error('Socket emission failed for comment creation:', socketErr.message);
+      return res.status(201).json({
+        success: true,
+        message: 'Comment added successfully',
+        data: commentRecord
+      });
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      client.release();
+      throw txErr;
     }
-
-    return res.status(201).json({
-      success: true,
-      message: 'Comment added successfully',
-      data: result.rows[0]
-    });
   } catch (error) {
     console.error('Add comment error:', error.message);
     return res.status(500).json({ success: false, message: 'Failed to post comment' });

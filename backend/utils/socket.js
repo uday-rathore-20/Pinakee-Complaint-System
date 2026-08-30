@@ -60,7 +60,10 @@ const authenticateSocket = async (socket, next) => {
 const verifyComplaintAccess = (user, complaint) => {
   if (user.role === 'ADMIN') return true;
   if (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id) return true;
-  if (user.role === 'AGENT' && complaint.assigned_to_id === user.id) return true;
+  if (user.role === 'AGENT') {
+    if (complaint.assigned_to_id === user.id) return true;
+    if (complaint.assigned_to_id === null && complaint.department_id === user.department_id) return true;
+  }
   if (user.role === 'CUSTOMER' && complaint.created_by_id === user.id) return true;
   return false;
 };

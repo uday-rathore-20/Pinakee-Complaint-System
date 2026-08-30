@@ -369,6 +369,8 @@ body {
 .badge-in-progress { background-color: #dbeafe; color: #2563eb; }
 .badge-resolved { background-color: #d1fae5; color: #059669; }
 .badge-closed { background-color: #f1f5f9; color: #475569; }
+.badge-on-hold { background-color: #ffedd5; color: #ea580c; }
+.badge-waiting-on-customer { background-color: #e0f2fe; color: #0369a1; }
 
 .badge-low { background-color: #f1f5f9; color: #475569; }
 .badge-medium { background-color: #e0f2fe; color: #0369a1; }

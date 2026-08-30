@@ -14,7 +14,9 @@ const {
   updateRoutingMode,
   listArchives,
   downloadArchive,
-  runArchiveManually
+  runArchiveManually,
+  getOutbox,
+  retryOutboxMail
 } = require('../controllers/settings.controller');
 
 // Require authentication and ADMIN role for all routes in this settings router
@@ -38,5 +40,8 @@ router.put('/routing', updateRoutingMode);
 router.get('/archives', listArchives);
 router.get('/archives/:filename', downloadArchive);
 router.post('/archives/run', runArchiveManually);
+
+router.get('/outbox', getOutbox);
+router.post('/outbox/:id/retry', retryOutboxMail);
 
 module.exports = router;

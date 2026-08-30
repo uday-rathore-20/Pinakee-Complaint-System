@@ -5,28 +5,34 @@
  */
 class NotificationService {
   /**
-   * Log helper representing email transmission.
+   * Log helper representing email transmission. Now inserts into email_outbox.
    */
-  logEmail(to, subject, body) {
-    console.log('\n---------------- [NOTIFICATION EMAIL OUTBOX] ----------------');
-    console.log(`To:      ${to}`);
-    console.log(`Subject: ${subject}`);
-    console.log('Body:');
-    console.log(body);
-    console.log('-------------------------------------------------------------\n');
+  async logEmail(to, subject, body, txClient = null) {
+    const dbPool = require('../config/db');
+    if (!dbPool) {
+      console.error('Cannot queue email: database pool is not available.');
+      return;
+    }
 
     try {
-      const fs = require('fs');
-      const path = require('path');
-      const logDir = path.join(__dirname, '../logs');
-      if (!fs.existsSync(logDir)) {
-        fs.mkdirSync(logDir, { recursive: true });
+      const queryText = `
+        INSERT INTO email_outbox (recipient, subject, body, status, attempts)
+        VALUES ($1, $2, $3, 'Pending', 0)
+        RETURNING id
+      `;
+      const queryArgs = [to, subject, body];
+
+      let res;
+      if (txClient) {
+        res = await txClient.query(queryText, queryArgs);
+      } else {
+        res = await dbPool.query(queryText, queryArgs);
       }
-      const logPath = path.join(logDir, 'email_simulator.log');
-      const logEntry = `[${new Date().toISOString()}] To: ${to}\nSubject: ${subject}\nBody:\n${body}\n==================================================\n\n`;
-      fs.appendFileSync(logPath, logEntry);
+
+      const emailId = res.rows[0]?.id;
+      // Keep console log debug output or a minimal indicator if needed
     } catch (err) {
-      console.error('Failed to write email simulator log:', err.message);
+      console.error('Failed to queue email into email_outbox:', err.message);
     }
   }
 
@@ -35,7 +41,7 @@ class NotificationService {
    * @param {Object} complaint - Ticket record details
    * @param {Object} assignee - Assignee user details (first_name, last_name, email)
    */
-  async sendAssignmentNotification(complaint, assignee) {
+  async sendAssignmentNotification(complaint, assignee, txClient = null) {
     if (!assignee || !assignee.email) return;
 
     const subject = `[PINakee] Complaint Ticket Assigned: #${complaint.ticket_number}`;
@@ -52,7 +58,7 @@ Please log in to the PINakee Dashboard to review details and update the status.
 Best regards,
 PINakee System Dispatcher`;
 
-    this.logEmail(assignee.email, subject, body);
+    await this.logEmail(assignee.email, subject, body, txClient);
   }
 
   /**
@@ -61,7 +67,7 @@ PINakee System Dispatcher`;
    * @param {Object} comment - Comment content details
    * @param {Object} recipient - Recipient user details (first_name, last_name, email)
    */
-  async sendCommentNotification(complaint, comment, recipient) {
+  async sendCommentNotification(complaint, comment, recipient, txClient = null) {
     if (!recipient || !recipient.email) return;
 
     const subject = `[PINakee] New Comment on Ticket #${complaint.ticket_number}`;
@@ -75,7 +81,7 @@ Comment:      "${comment.comment_text}"
 Best regards,
 PINakee System Dispatcher`;
 
-    this.logEmail(recipient.email, subject, body);
+    await this.logEmail(recipient.email, subject, body, txClient);
   }
 
   /**
@@ -83,7 +89,7 @@ PINakee System Dispatcher`;
    * @param {Object} complaint - Ticket record details
    * @param {Object} creator - Ticket creator/customer details
    */
-  async sendResolutionNotification(complaint, creator) {
+  async sendResolutionNotification(complaint, creator, txClient = null) {
     if (!creator || !creator.email) return;
 
     const subject = `[PINakee] Ticket Resolved: #${complaint.ticket_number}`;
@@ -96,7 +102,7 @@ Please review the resolution status. If the issue is fully addressed, you may cl
 Best regards,
 PINakee Support Team`;
 
-    this.logEmail(creator.email, subject, body);
+    await this.logEmail(creator.email, subject, body, txClient);
   }
   /**
    * Create an in-app notification entry.
@@ -258,7 +264,7 @@ PINakee Support Team`;
   /**
    * Dispatch SLA breach notification.
    */
-  async sendSlaBreachedEmail(complaint, recipient) {
+  async sendSlaBreachedEmail(complaint, recipient, txClient = null) {
     if (!recipient || !recipient.email) return;
 
     const subject = `[PINakee] [URGENT] SLA BREACHED: Ticket #${complaint.ticket_number}`;
@@ -275,7 +281,7 @@ Please check the system immediately to investigate the delay.
 Best regards,
 PINakee SLA Escalation Monitor`;
 
-    this.logEmail(recipient.email, subject, body);
+    await this.logEmail(recipient.email, subject, body, txClient);
   }
 
   /**

@@ -489,6 +489,99 @@ const runArchiveManually = async (req, res) => {
   }
 };
 
+const getOutbox = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page || '1', 10);
+    const limit = parseInt(req.query.limit || '10', 10);
+    const offset = (page - 1) * limit;
+
+    const status = req.query.status || '';
+    const recipient = req.query.recipient || '';
+    const search = req.query.search || '';
+
+    const whereClauses = [];
+    const queryParams = [];
+
+    if (status) {
+      queryParams.push(status);
+      whereClauses.push(`status = $${queryParams.length}`);
+    }
+    if (recipient) {
+      queryParams.push(`%${recipient}%`);
+      whereClauses.push(`recipient ILIKE $${queryParams.length}`);
+    }
+    if (search) {
+      queryParams.push(`%${search}%`);
+      whereClauses.push(`(subject ILIKE $${queryParams.length} OR body ILIKE $${queryParams.length} OR recipient ILIKE $${queryParams.length})`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    const countQuery = `SELECT COUNT(*)::int AS count FROM email_outbox ${whereSql}`;
+    const countRes = await dbPool.query(countQuery, queryParams);
+    const total = countRes.rows[0]?.count || 0;
+
+    const dataQuery = `
+      SELECT id, recipient, subject, body, status, attempts, last_attempt_at, error_message, created_at
+      FROM email_outbox
+      ${whereSql}
+      ORDER BY id DESC
+      LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}
+    `;
+    const dataParams = [...queryParams, limit, offset];
+    const dataRes = await dbPool.query(dataQuery, dataParams);
+
+    return res.status(200).json({
+      success: true,
+      data: dataRes.rows,
+      meta: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Settings getOutbox error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve email outbox logs' });
+  }
+};
+
+const retryOutboxMail = async (req, res) => {
+  const { id } = req.params;
+  const targetId = parseInt(id, 10);
+  if (isNaN(targetId)) {
+    return res.status(400).json({ success: false, message: 'Invalid email record ID' });
+  }
+
+  try {
+    const checkRes = await dbPool.query('SELECT * FROM email_outbox WHERE id = $1', [targetId]);
+    if (checkRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Email record not found' });
+    }
+
+    await dbPool.query(`
+      UPDATE email_outbox
+      SET status = 'Pending',
+          attempts = 0,
+          error_message = NULL,
+          last_attempt_at = NULL
+      WHERE id = $1
+    `, [targetId]);
+
+    const emailWorker = require('../utils/emailWorker');
+    emailWorker.processQueue().catch(err => console.error('Failed to run queue from retry API:', err));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Email reset to Pending. Dispatch has been triggered.'
+    });
+  } catch (error) {
+    console.error('Settings retryOutboxMail error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to retry email dispatch' });
+  }
+};
+
 module.exports = {
   getDepartments,
   createDepartment,
@@ -502,5 +595,7 @@ module.exports = {
   updateRoutingMode,
   listArchives,
   downloadArchive,
-  runArchiveManually
+  runArchiveManually,
+  getOutbox,
+  retryOutboxMail
 };

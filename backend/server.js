@@ -192,6 +192,10 @@ const server = app.listen(PORT, () => {
   // Start background log archiving daemon scheduler (checks every 24h)
   const { startArchiveScheduler } = require('./utils/archiveDaemon');
   startArchiveScheduler(24 * 60 * 60 * 1000);
+
+  // Start background email outbox worker (checks every 15s)
+  const emailWorker = require('./utils/emailWorker');
+  emailWorker.start(15000);
 });
 
 // Initialize Socket.IO engine
@@ -201,6 +205,9 @@ initSocket(server);
 // Graceful shutdown handling
 process.on('SIGINT', () => {
   logger.info('SIGINT signal received: closing HTTP server');
+  const emailWorker = require('./utils/emailWorker');
+  emailWorker.stop();
+
   server.close(() => {
     logger.info('HTTP server closed');
     if (dbPool) {
@@ -216,6 +223,9 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   logger.info('SIGTERM signal received: closing HTTP server');
+  const emailWorker = require('./utils/emailWorker');
+  emailWorker.stop();
+
   server.close(() => {
     logger.info('HTTP server closed');
     if (dbPool) {

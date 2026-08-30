@@ -16,6 +16,36 @@ const Settings = () => {
   const [routingMode, setRoutingMode] = useState('MANUAL');
   const [archives, setArchives] = useState([]);
 
+  // Outbox states
+  const [outbox, setOutbox] = useState([]);
+  const [outboxPage, setOutboxPage] = useState(1);
+  const [outboxPages, setOutboxPages] = useState(1);
+  const [outboxTotal, setOutboxTotal] = useState(0);
+  const [outboxLoading, setOutboxLoading] = useState(false);
+  const [outboxStatusFilter, setOutboxStatusFilter] = useState('');
+  const [outboxSearch, setOutboxSearch] = useState('');
+  const [selectedEmail, setSelectedEmail] = useState(null);
+  const [retryingEmailId, setRetryingEmailId] = useState(null);
+
+  const fetchOutbox = async (page = 1, status = outboxStatusFilter, search = outboxSearch) => {
+    setOutboxLoading(true);
+    try {
+      const query = `/settings/outbox?page=${page}&limit=10&status=${status}&search=${encodeURIComponent(search)}`;
+      const res = await authFetch(query);
+      const resData = await res.json();
+      if (resData.success) {
+        setOutbox(resData.data);
+        setOutboxPage(resData.meta.page);
+        setOutboxPages(resData.meta.pages);
+        setOutboxTotal(resData.meta.total);
+      }
+    } catch (err) {
+      console.error('Failed to fetch outbox mail logs:', err);
+    } finally {
+      setOutboxLoading(false);
+    }
+  };
+
   // Create Form States
   const [newDeptName, setNewDeptName] = useState('');
   const [newDeptDesc, setNewDeptDesc] = useState('');
@@ -90,6 +120,24 @@ const Settings = () => {
     setActionError(msg);
     setSuccessMessage('');
     setTimeout(() => setActionError(''), 5000);
+  };
+
+  const handleRetryEmail = async (id) => {
+    setRetryingEmailId(id);
+    try {
+      const res = await authFetch(`/settings/outbox/${id}/retry`, { method: 'POST' });
+      const resData = await res.json();
+      if (resData.success) {
+        triggerSuccess(resData.message || 'Email retry triggered successfully');
+        fetchOutbox(outboxPage);
+      } else {
+        triggerError(resData.message || 'Failed to trigger email retry');
+      }
+    } catch (err) {
+      triggerError('Network error triggering email retry');
+    } finally {
+      setRetryingEmailId(null);
+    }
   };
 
   const handleDownloadArchive = async (filename) => {
@@ -401,6 +449,22 @@ const Settings = () => {
           }}
         >
           Archived Logs
+        </button>
+        <button
+          onClick={() => { setActiveTab('outbox'); fetchOutbox(1); }}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '0.75rem 1rem',
+            cursor: 'pointer',
+            fontSize: '0.95rem',
+            fontWeight: 'bold',
+            color: activeTab === 'outbox' ? 'var(--primary-color)' : 'var(--text-muted)',
+            borderBottom: activeTab === 'outbox' ? '3px solid var(--primary-color)' : '3px solid transparent',
+            marginBottom: '-2px'
+          }}
+        >
+          Outbound Mail Logs
         </button>
       </div>
 
@@ -764,6 +828,215 @@ const Settings = () => {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* OUTBOX TAB CONTENT */}
+      {activeTab === 'outbox' && (
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+            <h2 style={{ fontSize: '1.15rem' }}>
+              Outbound Transactional Email logs ({outboxTotal})
+            </h2>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+              <input
+                type="text"
+                placeholder="Search recipient / subject..."
+                value={outboxSearch}
+                onChange={(e) => {
+                  setOutboxSearch(e.target.value);
+                  fetchOutbox(1, outboxStatusFilter, e.target.value);
+                }}
+                className="form-control"
+                style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', width: '200px' }}
+              />
+              <select
+                value={outboxStatusFilter}
+                onChange={(e) => {
+                  setOutboxStatusFilter(e.target.value);
+                  fetchOutbox(1, e.target.value, outboxSearch);
+                }}
+                className="form-control"
+                style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', width: '130px' }}
+              >
+                <option value="">All Statuses</option>
+                <option value="Pending">Pending</option>
+                <option value="Sent">Sent</option>
+                <option value="Failed">Failed</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => fetchOutbox(1)}
+                className="btn btn-secondary"
+                style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+                disabled={outboxLoading}
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {outboxLoading && outbox.length === 0 ? (
+            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+              Loading outbound mail logs...
+            </div>
+          ) : outbox.length === 0 ? (
+            <div style={{ padding: '2rem', textAlign: 'center', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px dashed var(--border-color)', color: 'var(--text-muted)' }}>
+              No email dispatch history matches the filters.
+            </div>
+          ) : (
+            <>
+              <div className="table-responsive">
+                <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid var(--border-color)', textAlign: 'left' }}>
+                      <th style={{ padding: '0.75rem' }}>Recipient</th>
+                      <th style={{ padding: '0.75rem' }}>Subject</th>
+                      <th style={{ padding: '0.75rem' }}>Status</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'center' }}>Attempts</th>
+                      <th style={{ padding: '0.75rem' }}>Created At</th>
+                      <th style={{ padding: '0.75rem', textAlign: 'right' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {outbox.map(mail => {
+                      let badgeColor = '#eab308'; // Pending
+                      if (mail.status === 'Sent') badgeColor = '#10b981';
+                      if (mail.status === 'Failed') badgeColor = '#ef4444';
+
+                      return (
+                        <tr key={mail.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          <td style={{ padding: '0.75rem', fontWeight: '500' }}>{mail.recipient}</td>
+                          <td style={{ padding: '0.75rem', fontSize: '0.9rem' }}>{mail.subject}</td>
+                          <td style={{ padding: '0.75rem' }}>
+                            <span
+                              className={`badge`}
+                              style={{
+                                background: badgeColor,
+                                color: '#ffffff',
+                                fontSize: '0.7rem',
+                                padding: '0.2rem 0.5rem',
+                                borderRadius: '4px'
+                              }}
+                            >
+                              {mail.status.toUpperCase()}
+                            </span>
+                            {mail.error_message && (
+                              <div style={{ fontSize: '0.7rem', color: '#dc2626', marginTop: '0.25rem', maxWidth: '250px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={mail.error_message}>
+                                Error: {mail.error_message}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.75rem', textAlign: 'center' }}>{mail.attempts}</td>
+                          <td style={{ padding: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            {new Date(mail.created_at).toLocaleString()}
+                          </td>
+                          <td style={{ padding: '0.75rem', textAlign: 'right' }}>
+                            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                              <button
+                                onClick={() => setSelectedEmail(mail)}
+                                className="btn btn-outline"
+                                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                              >
+                                View Body
+                              </button>
+                              {mail.status === 'Failed' && (
+                                <button
+                                  onClick={() => handleRetryEmail(mail.id)}
+                                  disabled={retryingEmailId === mail.id}
+                                  className="btn btn-primary"
+                                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', backgroundColor: '#3b82f6', borderColor: '#3b82f6' }}
+                                >
+                                  {retryingEmailId === mail.id ? 'Retrying...' : 'Retry'}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination Controls */}
+              {outboxPages > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: '1.5rem', gap: '1rem' }}>
+                  <button
+                    disabled={outboxPage <= 1 || outboxLoading}
+                    onClick={() => fetchOutbox(outboxPage - 1)}
+                    className="btn btn-secondary"
+                    style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}
+                  >
+                    Previous
+                  </button>
+                  <span style={{ fontSize: '0.85rem' }}>
+                    Page {outboxPage} of {outboxPages}
+                  </span>
+                  <button
+                    disabled={outboxPage >= outboxPages || outboxLoading}
+                    onClick={() => fetchOutbox(outboxPage + 1)}
+                    className="btn btn-secondary"
+                    style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* VIEW EMAIL BODY MODAL */}
+      {selectedEmail && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000
+        }}>
+          <div className="card" style={{ width: '600px', maxWidth: '90%', maxHeight: '80%', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
+              <h3 style={{ fontSize: '1.1rem' }}>View Outbound Email Body</h3>
+              <button
+                onClick={() => setSelectedEmail(null)}
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                &times;
+              </button>
+            </div>
+            <div style={{ fontSize: '0.85rem', marginBottom: '1rem' }}>
+              <div><strong>Recipient:</strong> {selectedEmail.recipient}</div>
+              <div><strong>Subject:</strong> {selectedEmail.subject}</div>
+              <div><strong>Queued At:</strong> {new Date(selectedEmail.created_at).toLocaleString()}</div>
+            </div>
+            <div style={{
+              backgroundColor: '#f8fafc',
+              border: '1px solid var(--border-color)',
+              borderRadius: '6px',
+              padding: '1rem',
+              whiteSpace: 'pre-wrap',
+              fontFamily: 'monospace',
+              fontSize: '0.85rem',
+              color: 'var(--text-color)',
+              maxHeight: '300px',
+              overflowY: 'auto'
+            }}>
+              {selectedEmail.body}
+            </div>
+            <div style={{ textAlign: 'right', marginTop: '1.5rem' }}>
+              <button onClick={() => setSelectedEmail(null)} className="btn btn-secondary">
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

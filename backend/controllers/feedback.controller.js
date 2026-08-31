@@ -103,9 +103,10 @@ const getFeedback = async (req, res) => {
     const isAdmin = user.role === 'ADMIN';
     const isDeptHead = user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id;
     const isAssignee = user.role === 'AGENT' && complaint.assigned_to_id === user.id;
+    const isUnassignedDeptAgent = user.role === 'AGENT' && complaint.assigned_to_id === null && complaint.department_id === user.department_id;
     const isCreator = user.role === 'CUSTOMER' && complaint.created_by_id === user.id;
 
-    if (!isAdmin && !isDeptHead && !isAssignee && !isCreator) {
+    if (!isAdmin && !isDeptHead && !isAssignee && !isUnassignedDeptAgent && !isCreator) {
       return res.status(403).json({ success: false, message: 'Forbidden: Insufficient privileges to view feedback' });
     }
 

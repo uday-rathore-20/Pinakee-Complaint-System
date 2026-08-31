@@ -349,16 +349,28 @@ const submitFcr = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Resolved status metadata is missing in the database' });
     }
 
-    // Execute state transitions
-    await dbPool.query("UPDATE field_call_reports SET status = 'Submitted' WHERE complaint_id = $1", [id]);
-    await dbPool.query("UPDATE complaints SET status_id = $1 WHERE id = $2", [resolvedStatusId, id]);
+    // Execute state transitions atomically inside a database transaction block
+    const client = await dbPool.connect();
+    try {
+      await client.query('BEGIN');
 
-    // Log in status history audit
-    const auditRemark = 'FCR submitted. Ticket resolved.';
-    await dbPool.query(`
-      INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [id, user.id, complaint.status_id, resolvedStatusId, auditRemark]);
+      await client.query("UPDATE field_call_reports SET status = 'Submitted' WHERE complaint_id = $1", [id]);
+      await client.query("UPDATE complaints SET status_id = $1 WHERE id = $2", [resolvedStatusId, id]);
+
+      // Log in status history audit
+      const auditRemark = 'FCR submitted. Ticket resolved.';
+      await client.query(`
+        INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [id, user.id, complaint.status_id, resolvedStatusId, auditRemark]);
+
+      await client.query('COMMIT');
+      client.release();
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      client.release();
+      throw txErr;
+    }
 
     logger.audit('COMPLAINT_RESOLVED', { complaintId: id, ticketNumber: complaint.ticket_number }, user, req.ip);
 
@@ -442,31 +454,43 @@ const confirmFcr = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Closed status metadata is missing in the database' });
     }
 
-    // Execute transitions
-    const finalizeQuery = `
-      UPDATE field_call_reports
-      SET status = 'Finalized',
-          customer_feedback = $1,
-          customer_rating = $2,
-          customer_confirmed_at = CURRENT_TIMESTAMP
-      WHERE complaint_id = $3
-    `;
-    await dbPool.query(finalizeQuery, [customer_feedback || '', rating, id]);
-    await dbPool.query("UPDATE complaints SET status_id = $1 WHERE id = $2", [closedStatusId, id]);
+    // Execute transitions atomically inside a database transaction block
+    const client = await dbPool.connect();
+    try {
+      await client.query('BEGIN');
 
-    // Propagate FCR rating into centralization store (DO NOTHING on conflict to prevent overwriting manual feedback)
-    await dbPool.query(`
-      INSERT INTO complaint_feedback (complaint_id, rating, comments)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (complaint_id) DO NOTHING
-    `, [id, rating, customer_feedback || '']);
+      const finalizeQuery = `
+        UPDATE field_call_reports
+        SET status = 'Finalized',
+            customer_feedback = $1,
+            customer_rating = $2,
+            customer_confirmed_at = CURRENT_TIMESTAMP
+        WHERE complaint_id = $3
+      `;
+      await client.query(finalizeQuery, [customer_feedback || '', rating, id]);
+      await client.query("UPDATE complaints SET status_id = $1 WHERE id = $2", [closedStatusId, id]);
 
-    // Log history
-    const auditRemark = `Ticket confirmed and closed by customer (Rating: ${rating}/5)`;
-    await dbPool.query(`
-      INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [id, user.id, complaint.status_id, closedStatusId, auditRemark]);
+      // Propagate FCR rating into centralization store (DO NOTHING on conflict to prevent overwriting manual feedback)
+      await client.query(`
+        INSERT INTO complaint_feedback (complaint_id, rating, comments)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (complaint_id) DO NOTHING
+      `, [id, rating, customer_feedback || '']);
+
+      // Log history
+      const auditRemark = `Ticket confirmed and closed by customer (Rating: ${rating}/5)`;
+      await client.query(`
+        INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [id, user.id, complaint.status_id, closedStatusId, auditRemark]);
+
+      await client.query('COMMIT');
+      client.release();
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      client.release();
+      throw txErr;
+    }
 
     logger.audit('COMPLAINT_CLOSED', { complaintId: id, ticketNumber: complaint.ticket_number }, user, req.ip);
 

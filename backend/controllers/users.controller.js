@@ -143,12 +143,21 @@ const createUser = async (req, res) => {
       });
     }
 
-    // Validate role exists
-    const roleExists = await checkRecordExists('roles', role_id);
-    if (!roleExists) {
+    // Validate role exists and is allowed for new user creation
+    const roleCheck = await dbPool.query('SELECT id, name FROM roles WHERE id = $1', [role_id]);
+    if (roleCheck.rows.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Invalid role_id: role does not exist'
+      });
+    }
+
+    const roleName = roleCheck.rows[0].name;
+    const allowedNewRoles = ['ADMIN', 'ENGINEER', 'CUSTOMER'];
+    if (!allowedNewRoles.includes(roleName)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid role_id: '${roleName}' is no longer accepted as an active application role. Allowed roles: ${allowedNewRoles.join(', ')}`
       });
     }
 
@@ -263,9 +272,17 @@ const updateUser = async (req, res) => {
     }
 
     if (role_id) {
-      const roleExists = await checkRecordExists('roles', role_id);
-      if (!roleExists) {
+      const roleCheck = await dbPool.query('SELECT id, name FROM roles WHERE id = $1', [role_id]);
+      if (roleCheck.rows.length === 0) {
         return res.status(400).json({ success: false, message: 'Invalid role_id: role does not exist' });
+      }
+      const roleName = roleCheck.rows[0].name;
+      const allowedNewRoles = ['ADMIN', 'ENGINEER', 'CUSTOMER'];
+      if (!allowedNewRoles.includes(roleName)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid role_id: '${roleName}' is no longer accepted as an active application role. Allowed roles: ${allowedNewRoles.join(', ')}`
+        });
       }
       values.push(role_id);
       updateFields.push(`role_id = $${values.length}`);

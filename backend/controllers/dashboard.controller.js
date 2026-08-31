@@ -30,9 +30,9 @@ const getDashboardStats = async (req, res) => {
       }
       params.push(user.department_id);
       roleFilter = `c.department_id = $1`;
-    } else if (user.role === 'AGENT') {
+    } else if (user.role === 'ENGINEER' || user.role === 'AGENT') {
       params.push(user.id);
-      roleFilter = `c.assigned_to_id = $1`;
+      roleFilter = `(c.assigned_to_id = $1 OR c.assigned_to_id IS NULL)`;
     } else if (user.role === 'CUSTOMER') {
       params.push(user.id);
       roleFilter = `c.created_by_id = $1`;
@@ -131,11 +131,10 @@ const getDashboardStats = async (req, res) => {
       statsData['by_department'] = by_department;
     }
 
-    // 6. Unassigned department tickets count (Agent and Dept Head only)
-    if ((user.role === 'AGENT' || user.role === 'DEPT_HEAD') && user.department_id) {
+    // 6. Unassigned tickets count (Engineer, Agent and Dept Head)
+    if (user.role === 'ENGINEER' || user.role === 'AGENT' || user.role === 'DEPT_HEAD') {
       const unassignedRes = await dbPool.query(
-        'SELECT COUNT(*)::int AS count FROM complaints WHERE department_id = $1 AND assigned_to_id IS NULL',
-        [user.department_id]
+        'SELECT COUNT(*)::int AS count FROM complaints WHERE assigned_to_id IS NULL'
       );
       statsData['unassigned_department_tickets'] = unassignedRes.rows[0]?.count || 0;
     }
@@ -175,9 +174,9 @@ const getRecentActivity = async (req, res) => {
       }
       params.push(user.department_id);
       roleFilter = `c.department_id = $1`;
-    } else if (user.role === 'AGENT') {
+    } else if (user.role === 'ENGINEER' || user.role === 'AGENT') {
       params.push(user.id);
-      roleFilter = `c.assigned_to_id = $1`;
+      roleFilter = `(c.assigned_to_id = $1 OR c.assigned_to_id IS NULL)`;
     } else if (user.role === 'CUSTOMER') {
       params.push(user.id);
       roleFilter = `c.created_by_id = $1`;

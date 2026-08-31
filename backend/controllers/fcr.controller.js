@@ -35,7 +35,7 @@ const getFcr = async (req, res) => {
 
     // Enforce authorization
     const isAdmin = user.role === 'ADMIN';
-    const isAssignee = user.role === 'AGENT' && complaint.assigned_to_id === user.id;
+    const isAssignee = (user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id;
     const isCreator = user.role === 'CUSTOMER' && complaint.created_by_id === user.id;
     const isDeptHead = user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id;
 
@@ -136,8 +136,8 @@ const createFcrDraft = async (req, res) => {
 
     const complaint = compCheck.rows[0];
 
-    // Enforce role authorization: must be the assigned agent
-    if (user.role !== 'AGENT' || complaint.assigned_to_id !== user.id) {
+    // Enforce role authorization: must be the assigned engineer
+    if ((user.role !== 'ENGINEER' && user.role !== 'AGENT') || complaint.assigned_to_id !== user.id) {
       return res.status(403).json({ success: false, message: 'Forbidden: Only the assigned representative can manage FCR records' });
     }
 
@@ -222,8 +222,8 @@ const updateFcrDraft = async (req, res) => {
 
     const complaint = compCheck.rows[0];
 
-    // Enforce role authorization: must be the assigned agent
-    if (user.role !== 'AGENT' || complaint.assigned_to_id !== user.id) {
+    // Enforce role authorization: must be the assigned engineer
+    if ((user.role !== 'ENGINEER' && user.role !== 'AGENT') || complaint.assigned_to_id !== user.id) {
       return res.status(403).json({ success: false, message: 'Forbidden: Only the assigned representative can manage FCR records' });
     }
 
@@ -313,8 +313,8 @@ const submitFcr = async (req, res) => {
 
     const complaint = compCheck.rows[0];
 
-    // Enforce role authorization: must be the assigned agent
-    if (user.role !== 'AGENT' || complaint.assigned_to_id !== user.id) {
+    // Enforce role authorization: must be the assigned engineer
+    if ((user.role !== 'ENGINEER' && user.role !== 'AGENT') || complaint.assigned_to_id !== user.id) {
       return res.status(403).json({ success: false, message: 'Forbidden: Only the assigned representative can manage FCR records' });
     }
 
@@ -547,7 +547,7 @@ const downloadFcrPdf = async (req, res) => {
 
     // Enforce authorization
     const isAdmin = user.role === 'ADMIN';
-    const isAssignee = user.role === 'AGENT' && complaint.assigned_to_id === user.id;
+    const isAssignee = (user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id;
     const isCreator = user.role === 'CUSTOMER' && complaint.created_by_id === user.id;
     const isDeptHead = user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id;
 

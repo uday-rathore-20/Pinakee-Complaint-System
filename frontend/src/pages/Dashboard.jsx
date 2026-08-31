@@ -48,10 +48,10 @@ const Dashboard = () => {
     <div className="page-container">
       <h1 style={{ marginBottom: '1.5rem' }}>Dashboard Overview</h1>
 
-      {user && (user.role === 'AGENT' || user.role === 'DEPT_HEAD') && stats?.unassigned_department_tickets > 0 && (
+      {user && (user.role === 'ENGINEER' || user.role === 'AGENT' || user.role === 'DEPT_HEAD') && stats?.unassigned_department_tickets > 0 && (
         <div className="alert alert-info" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', padding: '1rem 1.5rem' }}>
           <div>
-            <strong>Queue Notice:</strong> There are <strong>{stats.unassigned_department_tickets}</strong> unassigned complaints waiting in your department's queue.
+            <strong>Queue Notice:</strong> There are <strong>{stats.unassigned_department_tickets}</strong> unassigned complaints waiting in the queue.
           </div>
           <Link to="/complaints" className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', color: 'var(--text-color)', textDecoration: 'none' }}>
             View Queue

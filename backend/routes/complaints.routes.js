@@ -10,6 +10,7 @@ const {
   updateComplaintStatus,
   addComment,
   exportComplaints,
+  deleteComplaint,
 } = require('../controllers/complaints.controller');
 const {
   submitFeedback,
@@ -23,6 +24,7 @@ router.get('/', authenticateJWT, getComplaints);
 router.get('/:id', authenticateJWT, getComplaintById);
 router.post('/', authenticateJWT, createComplaint);
 router.put('/:id', authenticateJWT, updateComplaint);
+router.delete('/:id', authenticateJWT, deleteComplaint);
 router.patch('/:id/assign', authenticateJWT, assignComplaint);
 router.patch('/:id/claim', authenticateJWT, claimComplaint);
 router.patch('/:id/status', authenticateJWT, updateComplaintStatus);

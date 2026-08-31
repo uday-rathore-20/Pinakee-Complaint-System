@@ -23,14 +23,15 @@ const routeTicket = async (departmentId, txClient) => {
     return null;
   }
 
-  // 2. Fetch eligible active agents belonging to target department (role_id = 3 is AGENT)
+  // 2. Fetch eligible active engineers belonging to target department (role is ENGINEER / AGENT)
   const agentQuery = `
-    SELECT id
-    FROM users
-    WHERE role_id = 3
-      AND department_id = $1
-      AND is_active = true
-    ORDER BY id ASC
+    SELECT u.id
+    FROM users u
+    JOIN roles r ON u.role_id = r.id
+    WHERE r.name IN ('ENGINEER', 'AGENT')
+      AND u.department_id = $1
+      AND u.is_active = true
+    ORDER BY u.id ASC
   `;
   const agentRes = await txClient.query(agentQuery, [departmentId]);
   const agents = agentRes.rows;

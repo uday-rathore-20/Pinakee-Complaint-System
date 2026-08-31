@@ -6,7 +6,6 @@ const Users = () => {
   
   // Data States
   const [users, setUsers] = useState([]);
-  const [departments, setDepartments] = useState([]);
   
   // Modal & Form States
   const [showModal, setShowModal] = useState(false);
@@ -16,18 +15,16 @@ const Users = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [roleId, setRoleId] = useState('');
-  const [deptId, setDeptId] = useState('');
   
   const [loading, setLoading] = useState(true);
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [formError, setFormError] = useState('');
 
-  // Fixed seeded roles list mapping
+  // Fixed active application roles list
   const roles = [
     { id: 1, name: 'ADMIN' },
-    { id: 2, name: 'DEPT_HEAD' },
-    { id: 3, name: 'AGENT' },
+    { id: 3, name: 'ENGINEER' },
     { id: 4, name: 'CUSTOMER' }
   ];
 
@@ -45,22 +42,9 @@ const Users = () => {
     }
   };
 
-  const fetchDepartments = async () => {
-    try {
-      const res = await authFetch('/departments');
-      const result = await res.json();
-      if (result.success) {
-        setDepartments(result.data);
-      }
-    } catch (err) {
-      console.error('Failed to load departments lookup:', err);
-    }
-  };
-
   useEffect(() => {
     const init = async () => {
       await fetchUsersList();
-      await fetchDepartments();
       setLoading(false);
     };
     init();
@@ -73,7 +57,6 @@ const Users = () => {
     setEmail('');
     setPassword('');
     setRoleId('');
-    setDeptId('');
     setFormError('');
     setShowModal(true);
   };
@@ -87,9 +70,6 @@ const Users = () => {
 
     const matchedRole = roles.find(r => r.name === userRecord.role);
     setRoleId(matchedRole ? matchedRole.id.toString() : '');
-
-    const matchedDept = departments.find(d => d.name === userRecord.department);
-    setDeptId(matchedDept ? matchedDept.id.toString() : '');
 
     setFormError('');
     setShowModal(true);
@@ -143,8 +123,7 @@ const Users = () => {
         first_name: firstName.trim(),
         last_name: lastName.trim(),
         email: email.trim(),
-        role_id: parseInt(roleId),
-        department_id: deptId ? parseInt(deptId) : null
+        role_id: parseInt(roleId)
       };
 
       if (password) {
@@ -163,7 +142,6 @@ const Users = () => {
         setEmail('');
         setPassword('');
         setRoleId('');
-        setDeptId('');
         setEditingUser(null);
         setShowModal(false);
         await fetchUsersList();
@@ -228,7 +206,6 @@ const Users = () => {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Role</th>
-                <th>Department</th>
                 <th>Status</th>
                 <th>Action</th>
               </tr>
@@ -242,7 +219,6 @@ const Users = () => {
                   <td>
                     <span className="badge badge-assigned" style={{ fontSize: '0.7rem' }}>{u.role}</span>
                   </td>
-                  <td>{u.department || '—'}</td>
                   <td>
                     <span className={`badge ${u.is_active ? 'badge-resolved' : 'badge-closed'}`}>
                       {u.is_active ? 'Active' : 'Deactivated'}
@@ -337,32 +313,17 @@ const Users = () => {
                 />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
-                <div className="form-group" style={{ margin: '0' }}>
-                  <label className="form-label">Role Access</label>
-                  <select
-                    className="form-input"
-                    value={roleId}
-                    onChange={(e) => setRoleId(e.target.value)}
-                    required
-                  >
-                    <option value="">Select Role</option>
-                    {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                  </select>
-                </div>
-
-                <div className="form-group" style={{ margin: '0' }}>
-                  <label className="form-label">Department</label>
-                  <select
-                    className="form-input"
-                    value={deptId}
-                    onChange={(e) => setDeptId(e.target.value)}
-                    disabled={roleId === '4'} // Disabled for Customer role
-                  >
-                    <option value="">No Department</option>
-                    {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                  </select>
-                </div>
+              <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                <label className="form-label">Role</label>
+                <select
+                  className="form-input"
+                  value={roleId}
+                  onChange={(e) => setRoleId(e.target.value)}
+                  required
+                >
+                  <option value="">Select Role</option>
+                  {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>

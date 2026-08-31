@@ -30,11 +30,13 @@ const generateTicketNumber = async () => {
  */
 const verifyComplaintAccess = (user, complaint) => {
   if (user.role === 'ADMIN') return true;
-  if (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id) return true;
-  if (user.role === 'AGENT') {
+  if (user.role === 'ENGINEER' || user.role === 'AGENT') {
     if (complaint.assigned_to_id === user.id) return true;
-    if (complaint.assigned_to_id === null && complaint.department_id === user.department_id) return true;
+    if (complaint.assigned_to_id === null) {
+      if (!complaint.department_id || !user.department_id || complaint.department_id === user.department_id) return true;
+    }
   }
+  if (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id) return true;
   if (user.role === 'CUSTOMER' && complaint.created_by_id === user.id) return true;
   return false;
 };
@@ -82,35 +84,22 @@ const getComplaints = async (req, res) => {
     const { queue } = req.query;
 
     if (user.role === 'DEPT_HEAD') {
-      if (!user.department_id) {
-        return res.status(200).json({
-          success: true,
-          pagination: { total: 0, limit: finalLimit, offset: finalOffset },
-          count: 0,
-          data: []
-        });
-      }
-      queryParams.push(user.department_id);
-      whereClauses.push(`c.department_id = $${queryParams.length}`);
-      if (queue === 'unassigned') {
-        whereClauses.push(`c.assigned_to_id IS NULL`);
-      }
-    } else if (user.role === 'AGENT') {
-      if (!user.department_id) {
-        return res.status(200).json({
-          success: true,
-          pagination: { total: 0, limit: finalLimit, offset: finalOffset },
-          count: 0,
-          data: []
-        });
-      }
-      if (queue === 'unassigned') {
+      if (user.department_id) {
         queryParams.push(user.department_id);
         whereClauses.push(`c.department_id = $${queryParams.length}`);
+      }
+      if (queue === 'unassigned') {
         whereClauses.push(`c.assigned_to_id IS NULL`);
-      } else {
+      }
+    } else if (user.role === 'ENGINEER' || user.role === 'AGENT') {
+      if (queue === 'unassigned') {
+        whereClauses.push(`c.assigned_to_id IS NULL`);
+      } else if (queue === 'my') {
         queryParams.push(user.id);
         whereClauses.push(`c.assigned_to_id = $${queryParams.length}`);
+      } else {
+        queryParams.push(user.id);
+        whereClauses.push(`(c.assigned_to_id = $${queryParams.length} OR c.assigned_to_id IS NULL)`);
       }
     } else if (user.role === 'CUSTOMER') {
       queryParams.push(user.id);
@@ -598,11 +587,11 @@ const assignComplaint = async (req, res) => {
       if (targetAgent.role === 'CUSTOMER') {
         return res.status(400).json({ success: false, message: 'Tickets cannot be assigned to customer accounts' });
       }
-
-      // If department is specified, check that assignee is in it. If not, auto-assign the agent's department!
-      const targetDeptId = department_id || complaint.department_id || targetAgent.department_id;
-      if (targetAgent.department_id && targetDeptId && targetAgent.department_id !== targetDeptId) {
-        return res.status(400).json({ success: false, message: 'Agent does not belong to the target department' });
+      if (targetAgent.role === 'ADMIN') {
+        return res.status(400).json({ success: false, message: 'Tickets cannot be assigned to admin accounts' });
+      }
+      if (targetAgent.role !== 'ENGINEER' && targetAgent.role !== 'AGENT' && targetAgent.role !== 'DEPT_HEAD') {
+        return res.status(400).json({ success: false, message: 'Tickets can only be assigned to engineers' });
       }
     }
 
@@ -698,9 +687,9 @@ const claimComplaint = async (req, res) => {
   const { id } = req.params;
   const user = req.user;
 
-  // Enforce role authorization: AGENT or DEPT_HEAD
-  if (user.role !== 'AGENT' && user.role !== 'DEPT_HEAD') {
-    return res.status(403).json({ success: false, message: 'Forbidden: Only Agents and Department Heads can claim complaints' });
+  // Enforce role authorization: ENGINEER, AGENT or DEPT_HEAD
+  if (user.role !== 'ENGINEER' && user.role !== 'AGENT' && user.role !== 'DEPT_HEAD') {
+    return res.status(403).json({ success: false, message: 'Forbidden: Only Engineers can claim complaints' });
   }
 
   try {
@@ -721,16 +710,6 @@ const claimComplaint = async (req, res) => {
     }
 
     const complaint = compCheck.rows[0];
-
-    // Verify user belongs to a department
-    if (!user.department_id) {
-      return res.status(400).json({ success: false, message: 'Your account is not assigned to any department. Cannot claim tickets.' });
-    }
-
-    // Verify complaint belongs to user's department
-    if (complaint.department_id !== user.department_id) {
-      return res.status(403).json({ success: false, message: 'Forbidden: You can only claim tickets assigned to your department' });
-    }
 
     // Verify complaint is currently unassigned
     if (complaint.assigned_to_id !== null) {
@@ -825,7 +804,7 @@ const updateComplaintStatus = async (req, res) => {
     // Enforce role authorization
     const isAdmin = user.role === 'ADMIN';
     const isDeptHead = user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id;
-    const isAssignee = user.role === 'AGENT' && complaint.assigned_to_id === user.id;
+    const isAssignee = (user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id;
     const isCreator = user.role === 'CUSTOMER' && complaint.created_by_id === user.id;
 
     if (!isAdmin && !isDeptHead && !isAssignee && !isCreator) {
@@ -857,7 +836,7 @@ const updateComplaintStatus = async (req, res) => {
       if (current !== 'Resolved') {
         return res.status(400).json({ success: false, message: 'Tickets can only be closed by customers once they are marked as Resolved' });
       }
-    } else if (user.role === 'AGENT') {
+    } else if (user.role === 'ENGINEER' || user.role === 'AGENT') {
       if (complaint.assigned_to_id !== user.id) {
         return res.status(403).json({ success: false, message: 'Forbidden: You can only update the status of tickets assigned to you' });
       }
@@ -1237,6 +1216,96 @@ const exportComplaints = async (req, res) => {
   }
 };
 
+/**
+ * Delete a complaint (Customer can only delete own initial Pending complaint).
+ * DELETE /api/complaints/:id
+ */
+const deleteComplaint = async (req, res) => {
+  const { id } = req.params;
+  const user = req.user;
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    // Retrieve complaint with status name
+    const compResult = await dbPool.query(`
+      SELECT c.*, cs.name AS status_name
+      FROM complaints c
+      JOIN complaint_statuses cs ON c.status_id = cs.id
+      WHERE c.id = $1
+    `, [id]);
+
+    if (compResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
+
+    const complaint = compResult.rows[0];
+
+    // Authorization checks
+    if (user.role === 'CUSTOMER') {
+      if (complaint.created_by_id !== user.id) {
+        return res.status(403).json({ success: false, message: 'Forbidden: You can only delete your own complaints' });
+      }
+
+      // Check status: ONLY allowed if status is 'Pending'
+      if (complaint.status_name !== 'Pending') {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot delete complaint once it has entered active processing (Status: ${complaint.status_name})`
+        });
+      }
+    } else if (user.role === 'ADMIN') {
+      // ADMIN is allowed to delete
+    } else {
+      // ENGINEER / other roles cannot delete complaints
+      return res.status(403).json({ success: false, message: 'Forbidden: Only customer (for own pending complaints) or admin can delete complaints' });
+    }
+
+    // Fetch any attachment file paths to delete from storage backend
+    const attachmentsRes = await dbPool.query('SELECT file_path FROM complaint_attachments WHERE complaint_id = $1', [id]);
+    const filePaths = attachmentsRes.rows.map(r => r.file_path);
+
+    // Delete complaint atomically in a transaction (cascades to comments, status history, attachments, fcr, feedback)
+    const client = await dbPool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM complaints WHERE id = $1', [id]);
+      await client.query('COMMIT');
+    } catch (txError) {
+      await client.query('ROLLBACK');
+      throw txError;
+    } finally {
+      client.release();
+    }
+
+    // Clean up files in storage
+    const storage = require('../utils/storage');
+    for (const filePath of filePaths) {
+      try {
+        await storage.deleteFile(filePath);
+      } catch (storageErr) {
+        console.error('Storage file deletion error during complaint deletion:', storageErr.message);
+      }
+    }
+
+    logger.audit('COMPLAINT_DELETED', { complaintId: id, ticketNumber: complaint.ticket_number }, user, req.ip);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Complaint deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete complaint error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete complaint'
+    });
+  }
+};
+
 module.exports = {
   getComplaints,
   getComplaintById,
@@ -1247,4 +1316,5 @@ module.exports = {
   updateComplaintStatus,
   addComment,
   exportComplaints,
+  deleteComplaint,
 };

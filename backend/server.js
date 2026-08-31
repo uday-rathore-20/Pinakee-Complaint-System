@@ -92,6 +92,8 @@ app.use('/api', attachmentsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/audit-logs', auditLogsRoutes);
+app.use('/api/audit-trails', auditLogsRoutes);
+app.use('/api/audit-trail', auditLogsRoutes);
 app.use('/api/settings', settingsRoutes);
 
 if (process.env.NODE_ENV === 'test') {

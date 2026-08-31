@@ -10,9 +10,8 @@ const Complaints = () => {
   const [categories, setCategories] = useState([]);
   const [priorities, setPriorities] = useState([]);
   const [statuses, setStatuses] = useState([]);
-  const [departments, setDepartments] = useState([]);
 
-  // Active queue for AGENT (defaults to 'my')
+  // Active queue for ENGINEER (defaults to 'my')
   const [activeQueue, setActiveQueue] = useState('my');
 
   // Filter & Search States
@@ -30,11 +29,12 @@ const Complaints = () => {
 
   // Modal & Form States
   const [showModal, setShowModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(null);
+  const [deletingComplaint, setDeletingComplaint] = useState(false);
   const [formTitle, setFormTitle] = useState('');
   const [formDesc, setFormDesc] = useState('');
   const [formCat, setFormCat] = useState('');
   const [formPri, setFormPri] = useState('');
-  const [formDept, setFormDept] = useState('');
 
   const [loading, setLoading] = useState(true);
   const [formSubmitting, setFormSubmitting] = useState(false);
@@ -47,17 +47,14 @@ const Complaints = () => {
       const catRes = await authFetch('/categories');
       const priRes = await authFetch('/priorities');
       const statusRes = await authFetch('/statuses');
-      const deptRes = await authFetch('/departments');
 
       const categoriesResult = await catRes.json();
       const prioritiesResult = await priRes.json();
       const statusesResult = await statusRes.json();
-      const departmentsResult = await deptRes.json();
 
       if (categoriesResult.success) setCategories(categoriesResult.data);
       if (prioritiesResult.success) setPriorities(prioritiesResult.data);
       if (statusesResult.success) setStatuses(statusesResult.data);
-      if (departmentsResult.success) setDepartments(departmentsResult.data);
 
       await fetchComplaints();
     } catch (err) {
@@ -79,7 +76,7 @@ const Complaints = () => {
       params.push(`limit=${limit}`);
       params.push(`offset=${currentOffset}`);
 
-      if (user.role === 'AGENT') {
+      if (user.role === 'ENGINEER' || user.role === 'AGENT') {
         params.push(`queue=${activeQueue}`);
       }
 
@@ -112,6 +109,29 @@ const Complaints = () => {
       }
     } catch (err) {
       setError('Connection failure claiming ticket.');
+    }
+  };
+
+  const handleDeleteComplaint = async (ticketId) => {
+    setDeletingComplaint(true);
+    setError('');
+    try {
+      const res = await authFetch(`/complaints/${ticketId}`, {
+        method: 'DELETE'
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setShowDeleteModal(null);
+        await fetchComplaints();
+      } else {
+        setError(result.message || 'Failed to delete complaint.');
+        setShowDeleteModal(null);
+      }
+    } catch (err) {
+      setError('Connection failure deleting complaint.');
+      setShowDeleteModal(null);
+    } finally {
+      setDeletingComplaint(false);
     }
   };
 
@@ -181,8 +201,7 @@ const Complaints = () => {
           title: formTitle,
           description: formDesc,
           category_id: parseInt(formCat),
-          priority_id: parseInt(formPri),
-          department_id: formDept ? parseInt(formDept) : null
+          priority_id: parseInt(formPri)
         })
       });
       const result = await res.json();
@@ -193,7 +212,6 @@ const Complaints = () => {
         setFormDesc('');
         setFormCat('');
         setFormPri('');
-        setFormDept('');
         setShowModal(false);
         // Refresh list
         fetchComplaints();
@@ -229,8 +247,8 @@ const Complaints = () => {
 
       {error && <div className="alert alert-danger">{error}</div>}
 
-      {/* Queue selector tabs for AGENT */}
-      {user && user.role === 'AGENT' && (
+      {/* Queue selector tabs for ENGINEER */}
+      {user && (user.role === 'ENGINEER' || user.role === 'AGENT') && (
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
           <button
             className={`btn ${activeQueue === 'my' ? 'btn-primary' : 'btn-secondary'}`}
@@ -244,7 +262,7 @@ const Complaints = () => {
             style={{ padding: '0.4rem 1.2rem', fontSize: '0.875rem' }}
             onClick={() => setActiveQueue('unassigned')}
           >
-            Unassigned Department Tickets
+            Unassigned Tickets
           </button>
         </div>
       )}
@@ -357,7 +375,7 @@ const Complaints = () => {
                   <th>Status</th>
                   <th>SLA Status</th>
                   <th>Date Filed</th>
-                  {activeQueue === 'unassigned' && user && user.role === 'AGENT' && <th>Action</th>}
+                  {((activeQueue === 'unassigned' && user && (user.role === 'ENGINEER' || user.role === 'AGENT')) || (user && user.role === 'CUSTOMER')) && <th>Action</th>}
                 </tr>
               </thead>
               <tbody>
@@ -419,7 +437,20 @@ const Complaints = () => {
                         )}
                       </td>
                       <td>{dateStr}</td>
-                      {activeQueue === 'unassigned' && user && user.role === 'AGENT' && (
+                      {user && user.role === 'CUSTOMER' && (
+                        <td>
+                          {ticket.status === 'Pending' && (
+                            <button
+                              className="btn btn-danger"
+                              style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
+                              onClick={() => setShowDeleteModal(ticket.id)}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </td>
+                      )}
+                      {activeQueue === 'unassigned' && user && (user.role === 'ENGINEER' || user.role === 'AGENT') && (
                         <td>
                           <button
                             className="btn btn-secondary"
@@ -505,18 +536,6 @@ const Complaints = () => {
                 />
               </div>
 
-              <div className="form-group">
-                <label className="form-label">Department Group (Optional)</label>
-                <select
-                  className="form-input"
-                  value={formDept}
-                  onChange={(e) => setFormDept(e.target.value)}
-                >
-                  <option value="">No Department (Manual routing)</option>
-                  {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
-              </div>
-
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
                 <div className="form-group" style={{ margin: '0' }}>
                   <label className="form-label">Category Group</label>
@@ -554,6 +573,49 @@ const Complaints = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Customer Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '450px' }}>
+            <div className="modal-header">
+              <h2>Delete Complaint</h2>
+              <button
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onClick={() => setShowDeleteModal(null)}
+              >
+                &times;
+              </button>
+            </div>
+            <div style={{ padding: '1rem 0' }}>
+              <p style={{ color: 'var(--text-color)', marginBottom: '0.75rem' }}>
+                Are you sure you want to delete this complaint?
+              </p>
+              <p style={{ color: 'var(--danger-color, #ef4444)', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                This action cannot be undone.
+              </p>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowDeleteModal(null)}
+                disabled={deletingComplaint}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => handleDeleteComplaint(showDeleteModal)}
+                disabled={deletingComplaint}
+              >
+                {deletingComplaint ? 'Deleting...' : 'Delete Complaint'}
+              </button>
+            </div>
           </div>
         </div>
       )}

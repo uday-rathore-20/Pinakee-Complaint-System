@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 
@@ -23,6 +23,7 @@ const formatPausedDuration = (duration) => {
 
 const ComplaintDetail = () => {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { user, authFetch } = useAuth();
   const socket = useSocket();
 
@@ -73,6 +74,8 @@ const ComplaintDetail = () => {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [updatingAssign, setUpdatingAssign] = useState(false);
   const [claimingTicket, setClaimingTicket] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletingComplaint, setDeletingComplaint] = useState(false);
   const [fcr, setFcr] = useState(null);
   const [fcrLoading, setFcrLoading] = useState(true);
   const [fcrVisitDate, setFcrVisitDate] = useState('');
@@ -125,19 +128,14 @@ const ComplaintDetail = () => {
       const statusesResult = await statusRes.json();
       if (statusesResult.success) setStatuses(statusesResult.data);
 
-      // Staff roles can load departments and potential assignees
+      // Staff roles can load engineers for assignment list
       if (user.role === 'ADMIN' || user.role === 'DEPT_HEAD') {
-        const deptRes = await authFetch('/departments');
-        const deptsResult = await deptRes.json();
-        if (deptsResult.success) setDepartments(deptsResult.data);
-
-        // Fetch agents and dept heads for assignment list
-        const agentsRes = await authFetch('/users?is_active=true');
-        const agentsResult = await agentsRes.json();
-        if (agentsResult.success) {
-          // Filter to select only staff members (ADMIN, DEPT_HEAD, AGENT)
-          const staff = agentsResult.data.filter(u => u.role !== 'CUSTOMER');
-          setAgents(staff);
+        const usersRes = await authFetch('/users?is_active=true');
+        const usersResult = await usersRes.json();
+        if (usersResult.success) {
+          // Filter to select only engineers (ENGINEER or legacy AGENT)
+          const engineers = usersResult.data.filter(u => u.role === 'ENGINEER' || u.role === 'AGENT');
+          setAgents(engineers);
         }
       }
     } catch (err) {
@@ -383,7 +381,7 @@ const ComplaintDetail = () => {
           if (current === 'Resolved') {
             allowed.push(...statuses.filter(s => s.name === 'Closed'));
           }
-        } else if (user.role === 'AGENT') {
+        } else if (user.role === 'ENGINEER' || user.role === 'AGENT') {
           if (complaint.assigned_to_id === user.id) {
             if (current === 'Assigned') {
               allowed.push(...statuses.filter(s => s.name === 'In Progress'));
@@ -611,6 +609,28 @@ const ComplaintDetail = () => {
     }
   };
 
+  const handleDeleteComplaint = async () => {
+    setDeletingComplaint(true);
+    setActionError('');
+    try {
+      const res = await authFetch(`/complaints/${id}`, {
+        method: 'DELETE'
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        navigate('/complaints');
+      } else {
+        setActionError(result.message || 'Failed to delete complaint.');
+        setShowDeleteModal(false);
+      }
+    } catch (err) {
+      setActionError('Network error deleting complaint.');
+      setShowDeleteModal(false);
+    } finally {
+      setDeletingComplaint(false);
+    }
+  };
+
   if (loading) {
     return <div className="page-container"><h2>Loading ticket details...</h2></div>;
   }
@@ -640,7 +660,7 @@ const ComplaintDetail = () => {
         if (current === 'Resolved') {
           allowedOptions.push(...statuses.filter(s => s.name === 'Closed'));
         }
-      } else if (user.role === 'AGENT') {
+      } else if (user.role === 'ENGINEER' || user.role === 'AGENT') {
         if (complaint.assigned_to_id === user.id) {
           if (current === 'Assigned') {
             allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
@@ -681,9 +701,19 @@ const ComplaintDetail = () => {
           </span>
           <h1 style={{ marginTop: '0.25rem' }}>{complaint.title}</h1>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <span className={`badge badge-${priorityKey}`} style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>{complaint.priority}</span>
           <span className={`badge badge-${statusKey}`} style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>{complaint.status}</span>
+          {user.role === 'CUSTOMER' && complaint.created_by_id === user.id && complaint.status === 'Pending' && (
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() => setShowDeleteModal(true)}
+              style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+            >
+              Delete Complaint
+            </button>
+          )}
         </div>
       </div>
 
@@ -774,8 +804,8 @@ const ComplaintDetail = () => {
                 )}
               </div>
 
-              {/* CASE 1: AGENT creating/editing draft */}
-              {user.role === 'AGENT' && complaint.assigned_to_id === user.id && (!fcr || fcr.status === 'Draft') && (
+              {/* CASE 1: ENGINEER creating/editing draft */}
+              {(user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id && (!fcr || fcr.status === 'Draft') && (
                 <form onSubmit={handleSubmitFcrAction}>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
                     <div className="form-group" style={{ margin: '0' }}>
@@ -1008,14 +1038,14 @@ const ComplaintDetail = () => {
               )}
 
               {/* CASE 5: Staff view where FCR draft is not yet created */}
-              {user.role !== 'CUSTOMER' && (user.role !== 'AGENT' || complaint.assigned_to_id !== user.id) && !fcr && (
+              {user.role !== 'CUSTOMER' && ((user.role !== 'ENGINEER' && user.role !== 'AGENT') || complaint.assigned_to_id !== user.id) && !fcr && (
                 <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: '0' }}>
                   No service call report has been registered for this complaint.
                 </p>
               )}
 
-              {/* CASE 6: Assigned Agent when FCR is submitted */}
-              {user.role === 'AGENT' && complaint.assigned_to_id === user.id && fcr && fcr.status === 'Submitted' && (
+              {/* CASE 6: Assigned Engineer when FCR is submitted */}
+              {(user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id && fcr && fcr.status === 'Submitted' && (
                 <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: '0', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
                   You have submitted this FCR. It is now read-only pending customer sign-off.
                 </p>
@@ -1158,11 +1188,7 @@ const ComplaintDetail = () => {
                 <strong>{complaint.creator_first_name} {complaint.creator_last_name}</strong>
               </li>
               <li>
-                <span style={{ color: 'var(--text-muted)' }}>Department:</span>{' '}
-                <strong>{complaint.department || 'Unassigned'}</strong>
-              </li>
-              <li>
-                <span style={{ color: 'var(--text-muted)' }}>Assigned Agent:</span>{' '}
+                <span style={{ color: 'var(--text-muted)' }}>Assigned Engineer:</span>{' '}
                 <strong>
                   {complaint.assignee_first_name
                     ? `${complaint.assignee_first_name} ${complaint.assignee_last_name}`
@@ -1283,12 +1309,12 @@ const ComplaintDetail = () => {
             </div>
           )}
 
-          {/* Claim Ticket Widget for Agents in the same department */}
-          {user && (user.role === 'AGENT' || user.role === 'DEPT_HEAD') && !complaint.assigned_to_id && complaint.department_id === user.department_id && (
+          {/* Claim Ticket Widget for Engineers when ticket is unassigned */}
+          {user && (user.role === 'ENGINEER' || user.role === 'AGENT' || user.role === 'DEPT_HEAD') && !complaint.assigned_to_id && (
             <div className="card" style={{ background: '#f8fafc', border: '1px dashed var(--primary-color)' }}>
               <h3 style={{ marginBottom: '0.5rem', fontSize: '0.95rem', color: 'var(--primary-color)' }}>Ticket is Unassigned</h3>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-                This complaint is routed to your department. Claim it to take ownership and start resolving.
+                This complaint is unassigned. Claim it to take ownership and start resolving.
               </p>
               <button
                 type="button"
@@ -1338,27 +1364,15 @@ const ComplaintDetail = () => {
             </div>
           )}
 
-          {/* Assignment Routing widget (Admin/Head only) */}
-          {isAdminOrHead && (
+          {/* Assign Engineer widget (Admin only) */}
+          {user.role === 'ADMIN' && (
             <div className="card">
               <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem' }}>
-                Routing & Assignment
+                Assign Engineer
               </h3>
               <form onSubmit={handleAssignRouting}>
                 <div className="form-group">
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Department</label>
-                  <select
-                    className="form-input"
-                    value={selectedDept}
-                    onChange={(e) => setSelectedDept(e.target.value)}
-                  >
-                    <option value="">No Department</option>
-                    {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Assignee Staff</label>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Select Engineer</label>
                   <select
                     className="form-input"
                     value={selectedAgent}
@@ -1367,14 +1381,14 @@ const ComplaintDetail = () => {
                     <option value="">Unassigned</option>
                     {agents.map(a => (
                       <option key={a.id} value={a.id}>
-                        {a.first_name} {a.last_name} ({a.role})
+                        {a.first_name} {a.last_name} ({a.email})
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <button type="submit" className="btn btn-secondary btn-block" disabled={updatingAssign}>
-                  {updatingAssign ? 'Saving Routing...' : 'Save Assignment'}
+                  {updatingAssign ? 'Saving Assignment...' : 'Confirm Assignment'}
                 </button>
               </form>
             </div>
@@ -1404,6 +1418,49 @@ const ComplaintDetail = () => {
           </div>
         </div>
       </div>
+
+      {/* Customer Delete Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '450px' }}>
+            <div className="modal-header">
+              <h2>Delete Complaint</h2>
+              <button
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onClick={() => setShowDeleteModal(false)}
+              >
+                &times;
+              </button>
+            </div>
+            <div style={{ padding: '1rem 0' }}>
+              <p style={{ color: 'var(--text-color)', marginBottom: '0.75rem' }}>
+                Are you sure you want to delete this complaint?
+              </p>
+              <p style={{ color: 'var(--danger-color, #ef4444)', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                This action cannot be undone.
+              </p>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowDeleteModal(false)}
+                disabled={deletingComplaint}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={handleDeleteComplaint}
+                disabled={deletingComplaint}
+              >
+                {deletingComplaint ? 'Deleting...' : 'Delete Complaint'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

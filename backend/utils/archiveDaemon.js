@@ -95,27 +95,33 @@ const archiveTable = async (tableName, userContext, ipAddress, client) => {
   return { count: records.length, filename };
 };
 
-/**
- * Performs archival for both audit logs and in-app notifications.
- */
+const lockManager = require('./lockManager');
+
 const runArchiver = async (userContext = null, ipAddress = null) => {
   if (isRunning) {
     logger.info('Archiving Daemon: Job already in progress. Skipping execution.');
     return { success: false, message: 'Archiving job already in progress' };
   }
 
+  // 1. Attempt session-level Postgres advisory lock
+  const lockHandle = await lockManager.tryLock(lockManager.LOCK_ARCHIVE);
+  if (!lockHandle) {
+    logger.info('Archiving Daemon: Archiver is already running on another node. Skipping execution.');
+    return { success: false, message: 'Archiving job already running on another node' };
+  }
+
   isRunning = true;
   logger.info('Archiving Daemon: Starting automated archival and log pruning check...');
 
-  if (!dbPool) {
-    isRunning = false;
-    return { success: false, message: 'Database connection is unavailable' };
-  }
-
-  const client = await dbPool.connect();
   const createdFiles = [];
+  let client;
 
   try {
+    if (!dbPool) {
+      return { success: false, message: 'Database connection is unavailable' };
+    }
+
+    client = await dbPool.connect();
     await client.query('BEGIN');
 
     // Archive audit logs
@@ -138,9 +144,9 @@ const runArchiver = async (userContext = null, ipAddress = null) => {
 
     await client.query('COMMIT');
     client.release();
+    client = null;
 
     logger.info(`Archiving Daemon: Finished run. Pruned ${auditRes.count} audit logs, ${notifRes.count} notifications, and ${emailsRes.count} emails.`);
-    isRunning = false;
 
     return {
       success: true,
@@ -150,8 +156,10 @@ const runArchiver = async (userContext = null, ipAddress = null) => {
       filesGenerated: createdFiles
     };
   } catch (error) {
-    await client.query('ROLLBACK');
-    client.release();
+    if (client) {
+      await client.query('ROLLBACK');
+      client.release();
+    }
 
     // Cleanup generated files on transaction failure using cloud storage deletion to maintain idempotency
     for (const f of createdFiles) {
@@ -164,9 +172,11 @@ const runArchiver = async (userContext = null, ipAddress = null) => {
 
     logger.audit('ARCHIVE_DAEMON_FAILURE', { error: error.message }, userContext, ipAddress);
     logger.error('Archiving Daemon failure:', { message: error.message, stack: error.stack });
-    isRunning = false;
 
     throw error;
+  } finally {
+    isRunning = false;
+    await lockManager.unlock(lockHandle);
   }
 };
 

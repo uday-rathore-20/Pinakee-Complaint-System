@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 class StorageDriver {
@@ -12,6 +12,18 @@ class StorageDriver {
   }
   async deleteFile(objectKey) {
     throw new Error('deleteFile not implemented');
+  }
+  async saveArchiveFile(fileName, buffer) {
+    throw new Error('saveArchiveFile not implemented');
+  }
+  async listArchiveFiles() {
+    throw new Error('listArchiveFiles not implemented');
+  }
+  async getArchiveStreamOrUrl(fileName) {
+    throw new Error('getArchiveStreamOrUrl not implemented');
+  }
+  async deleteArchiveFile(fileName) {
+    throw new Error('deleteArchiveFile not implemented');
   }
 }
 
@@ -49,6 +61,10 @@ class S3StorageDriver extends StorageDriver {
         }
       });
       this.bucketName = process.env.AWS_S3_BUCKET;
+    }
+    this.archiveDir = path.join(__dirname, '..', 'archives');
+    if (!fs.existsSync(this.archiveDir)) {
+      fs.mkdirSync(this.archiveDir, { recursive: true });
     }
   }
 
@@ -115,6 +131,109 @@ class S3StorageDriver extends StorageDriver {
       const command = new DeleteObjectCommand({
         Bucket: this.bucketName,
         Key: objectKey
+      });
+      await this.s3Client.send(command);
+    }
+  }
+
+  /**
+   * Save compressed archive file.
+   * @param {string} fileName - Target archive filename
+   * @param {Buffer} buffer - Compressed file buffer
+   */
+  async saveArchiveFile(fileName, buffer) {
+    if (this.useMock) {
+      const destinationPath = path.join(this.archiveDir, fileName);
+      await fs.promises.writeFile(destinationPath, buffer);
+    } else {
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: `archives/${fileName}`,
+        Body: buffer,
+        ContentType: 'application/x-gzip'
+      });
+      await this.s3Client.send(command);
+    }
+  }
+
+  /**
+   * List all archive files under archives/ prefix (or mock local folder).
+   * @returns {Promise<Array>} List of archive objects
+   */
+  async listArchiveFiles() {
+    const archivePattern = /^archive-(audit|notifications|emails)-\d{8}-\d{6}\.json\.gz$/;
+    if (this.useMock) {
+      if (!fs.existsSync(this.archiveDir)) return [];
+      const files = await fs.promises.readdir(this.archiveDir);
+      const list = [];
+      for (const file of files) {
+        if (archivePattern.test(file)) {
+          const stats = await fs.promises.stat(path.join(this.archiveDir, file));
+          list.push({
+            filename: file,
+            size: stats.size,
+            created_at: stats.mtime
+          });
+        }
+      }
+      return list;
+    } else {
+      const command = new ListObjectsV2Command({
+        Bucket: this.bucketName,
+        Prefix: 'archives/'
+      });
+      const res = await this.s3Client.send(command);
+      const list = [];
+      if (res.Contents) {
+        for (const item of res.Contents) {
+          const filename = path.basename(item.Key);
+          if (archivePattern.test(filename)) {
+            list.push({
+              filename,
+              size: item.Size,
+              created_at: item.LastModified
+            });
+          }
+        }
+      }
+      return list;
+    }
+  }
+
+  /**
+   * Get archive presigned download URL (or mock simulation path).
+   * @param {string} fileName - Archive filename
+   * @returns {Promise<Object>} Object with type and url/filePath
+   */
+  async getArchiveStreamOrUrl(fileName) {
+    if (this.useMock) {
+      const filePath = path.join(this.archiveDir, fileName);
+      return { type: 'local', filePath };
+    } else {
+      const command = new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: `archives/${fileName}`,
+        ResponseContentDisposition: `attachment; filename="${fileName}"`
+      });
+      const url = await getSignedUrl(this.s3Client, command, { expiresIn: 600 });
+      return { type: 's3', url };
+    }
+  }
+
+  /**
+   * Delete archive file from storage backend.
+   * @param {string} fileName - Filename to delete
+   */
+  async deleteArchiveFile(fileName) {
+    if (this.useMock) {
+      const filePath = path.join(this.archiveDir, fileName);
+      if (fs.existsSync(filePath)) {
+        await fs.promises.unlink(filePath);
+      }
+    } else {
+      const command = new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key: `archives/${fileName}`
       });
       await this.s3Client.send(command);
     }

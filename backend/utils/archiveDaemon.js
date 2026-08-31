@@ -3,6 +3,7 @@ const path = require('path');
 const zlib = require('zlib');
 const dbPool = require('../config/db');
 const logger = require('./logger');
+const storage = require('./storage');
 
 const archiveDir = path.join(__dirname, '..', 'archives');
 
@@ -31,13 +32,23 @@ const compressData = (dataStr) => {
 const archiveTable = async (tableName, userContext, ipAddress, client) => {
   // 1. Fetch records older than 90 days
   // Use a transaction-bound select with row-level locks
-  const selectQuery = `
+  let selectQuery = `
     SELECT *
     FROM ${tableName}
     WHERE created_at < NOW() - INTERVAL '90 days'
     ORDER BY id ASC
     FOR UPDATE
   `;
+  if (tableName === 'email_outbox') {
+    selectQuery = `
+      SELECT *
+      FROM email_outbox
+      WHERE created_at < NOW() - INTERVAL '90 days'
+        AND status IN ('Sent', 'Failed')
+      ORDER BY id ASC
+      FOR UPDATE
+    `;
+  }
   const selectRes = await client.query(selectQuery);
   const records = selectRes.rows;
 
@@ -50,21 +61,20 @@ const archiveTable = async (tableName, userContext, ipAddress, client) => {
   const yyyymmdd = now.toISOString().slice(0, 10).replace(/-/g, '');
   const hhmmss = now.toTimeString().slice(0, 8).replace(/:/g, '');
 
-  const prefix = tableName === 'audit_logs' ? 'audit' : 'notifications';
+  let prefix = 'notifications';
+  if (tableName === 'audit_logs') {
+    prefix = 'audit';
+  } else if (tableName === 'email_outbox') {
+    prefix = 'emails';
+  }
   const filename = `archive-${prefix}-${yyyymmdd}-${hhmmss}.json.gz`;
-  const filePath = path.join(archiveDir, filename);
 
   // 3. Serialize and compress the database rows
   const serialized = JSON.stringify(records, null, 2);
   const compressedBuffer = await compressData(serialized);
 
-  // 4. Write compressed file to disk
-  fs.writeFileSync(filePath, compressedBuffer);
-
-  // Verify file creation and non-zero size before database deletion
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).size === 0) {
-    throw new Error(`Failed to write valid archive file on disk at: ${filePath}`);
-  }
+  // 4. Save to cloud/mock storage backend
+  await storage.saveArchiveFile(filename, compressedBuffer);
 
   // 5. Delete archived rows inside the transaction
   const maxId = records[records.length - 1].id;
@@ -82,7 +92,7 @@ const archiveTable = async (tableName, userContext, ipAddress, client) => {
     maxPrunedId: maxId
   }, userContext, ipAddress);
 
-  return { count: records.length, filename, filePath };
+  return { count: records.length, filename };
 };
 
 /**
@@ -111,41 +121,46 @@ const runArchiver = async (userContext = null, ipAddress = null) => {
     // Archive audit logs
     const auditRes = await archiveTable('audit_logs', userContext, ipAddress, client);
     if (auditRes.filename) {
-      createdFiles.push(auditRes.filePath);
+      createdFiles.push(auditRes.filename);
     }
 
     // Archive in-app notifications
     const notifRes = await archiveTable('in_app_notifications', userContext, ipAddress, client);
     if (notifRes.filename) {
-      createdFiles.push(notifRes.filePath);
+      createdFiles.push(notifRes.filename);
+    }
+
+    // Archive email outbox
+    const emailsRes = await archiveTable('email_outbox', userContext, ipAddress, client);
+    if (emailsRes.filename) {
+      createdFiles.push(emailsRes.filename);
     }
 
     await client.query('COMMIT');
     client.release();
 
-    logger.info(`Archiving Daemon: Finished run. Pruned ${auditRes.count} audit logs and ${notifRes.count} notifications.`);
+    logger.info(`Archiving Daemon: Finished run. Pruned ${auditRes.count} audit logs, ${notifRes.count} notifications, and ${emailsRes.count} emails.`);
     isRunning = false;
 
     return {
       success: true,
       auditPruned: auditRes.count,
       notificationsPruned: notifRes.count,
-      filesGenerated: createdFiles.map(p => path.basename(p))
+      emailsPruned: emailsRes.count,
+      filesGenerated: createdFiles
     };
   } catch (error) {
     await client.query('ROLLBACK');
     client.release();
 
-    // Cleanup generated files on transaction failure to maintain idempotency
-    createdFiles.forEach(f => {
-      if (fs.existsSync(f)) {
-        try {
-          fs.unlinkSync(f);
-        } catch (unlinkErr) {
-          console.error(`Failed to delete failed archive file ${f}:`, unlinkErr.message);
-        }
+    // Cleanup generated files on transaction failure using cloud storage deletion to maintain idempotency
+    for (const f of createdFiles) {
+      try {
+        await storage.deleteArchiveFile(f);
+      } catch (unlinkErr) {
+        console.error(`Failed to delete failed archive file ${f}:`, unlinkErr.message);
       }
-    });
+    }
 
     logger.audit('ARCHIVE_DAEMON_FAILURE', { error: error.message }, userContext, ipAddress);
     logger.error('Archiving Daemon failure:', { message: error.message, stack: error.stack });

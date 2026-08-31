@@ -16,6 +16,9 @@ async function sendEmail(recipient, subject, body) {
     if (recipient === 'fail_me@test.com') {
       return { success: false, error: 'SIMULATED_EMAIL_DISPATCH_FAILURE' };
     }
+    if (recipient.includes('delay_300')) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
 
     // 1. Dev/Test mode: Write to simulator log
     const logDir = path.join(__dirname, '../logs');
@@ -57,21 +60,37 @@ async function sendEmail(recipient, subject, body) {
   }
 }
 
-/**
- * Process a single email job from the queue using row-locks.
- */
 async function processNextJob() {
   if (!dbPool) return false;
 
+  // Sweep any genuinely expired Processing leases first (attempts >= 3)
+  try {
+    await dbPool.query(`
+      UPDATE email_outbox
+      SET status = 'Failed',
+          error_message = 'Worker lease expired: processing limit reached'
+      WHERE status = 'Processing'
+        AND last_attempt_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes'
+        AND attempts >= 3
+    `);
+  } catch (sweepErr) {
+    console.error('Email Worker: Sweep query failed:', sweepErr.message);
+  }
+
+  // Phase 1: Claim the job (Atomic, fast, short-lived transaction)
+  let job = null;
+  let newAttempts = 0;
   const client = await dbPool.connect();
   try {
     await client.query('BEGIN');
 
-    // Select the next job and lock the row, skipping already locked ones
+    // Select the next available job
     const selectQuery = `
       SELECT id, recipient, subject, body, attempts
       FROM email_outbox
-      WHERE status = 'Pending' OR (status = 'Failed' AND attempts < 3 AND (last_attempt_at IS NULL OR last_attempt_at < CURRENT_TIMESTAMP - INTERVAL '10 seconds'))
+      WHERE status = 'Pending'
+         OR (status = 'Failed' AND attempts < 3 AND (last_attempt_at IS NULL OR last_attempt_at < CURRENT_TIMESTAMP - INTERVAL '10 seconds'))
+         OR (status = 'Processing' AND last_attempt_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes' AND attempts < 3)
       ORDER BY id ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
@@ -83,42 +102,74 @@ async function processNextJob() {
       return false; // No jobs to process
     }
 
-    const job = selectRes.rows[0];
-    const newAttempts = job.attempts + 1;
+    job = selectRes.rows[0];
+    newAttempts = job.attempts + 1;
 
-    // Attempt to dispatch
-    const result = await sendEmail(job.recipient, job.subject, job.body);
-
-    if (result.success) {
-      // Mark as Sent
-      await client.query(`
-        UPDATE email_outbox
-        SET status = 'Sent',
-            attempts = $1,
-            last_attempt_at = CURRENT_TIMESTAMP,
-            error_message = NULL
-        WHERE id = $2
-      `, [newAttempts, job.id]);
-    } else {
-      // Mark as Failed
-      await client.query(`
-        UPDATE email_outbox
-        SET status = 'Failed',
-            attempts = $1,
-            last_attempt_at = CURRENT_TIMESTAMP,
-            error_message = $2
-        WHERE id = $3
-      `, [newAttempts, result.error, job.id]);
-    }
+    // Transition status to Processing and increment attempts count atomically
+    await client.query(`
+      UPDATE email_outbox
+      SET status = 'Processing',
+          attempts = $1,
+          last_attempt_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+    `, [newAttempts, job.id]);
 
     await client.query('COMMIT');
-    return true; // Processed a job, check if more are available
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Email Worker: Error processing email job:', err.message);
+    console.error('Email Worker: Error claiming job:', err.message);
     return false;
   } finally {
     client.release();
+  }
+
+  // Phase 2: Dispatch SMTP/Mock Email (Non-Blocking, NO open DB transaction/client)
+  let result;
+  try {
+    result = await sendEmail(job.recipient, job.subject, job.body);
+  } catch (sendErr) {
+    result = { success: false, error: sendErr.message };
+  }
+
+  // Phase 3: Finalize status (Atomic, fresh connection)
+  const finalizeClient = await dbPool.connect();
+  try {
+    await finalizeClient.query('BEGIN');
+
+    if (result.success) {
+      // Mark as Sent with stale worker protection (attempts must still match newAttempts)
+      const updateRes = await finalizeClient.query(`
+        UPDATE email_outbox
+        SET status = 'Sent',
+            error_message = NULL
+        WHERE id = $1 AND attempts = $2 AND status = 'Processing'
+      `, [job.id, newAttempts]);
+
+      if (updateRes.rowCount === 0) {
+        console.warn(`Email Worker: Stale worker lease detected for job ID ${job.id}. Finalization aborted.`);
+      }
+    } else {
+      // Mark as Failed with stale worker protection (attempts must still match newAttempts)
+      const updateRes = await finalizeClient.query(`
+        UPDATE email_outbox
+        SET status = 'Failed',
+            error_message = $2
+        WHERE id = $1 AND attempts = $3 AND status = 'Processing'
+      `, [job.id, result.error, newAttempts]);
+
+      if (updateRes.rowCount === 0) {
+        console.warn(`Email Worker: Stale worker lease detected for job ID ${job.id}. Finalization aborted.`);
+      }
+    }
+
+    await finalizeClient.query('COMMIT');
+    return true; // Successfully processed a job, check if more are available
+  } catch (finalizeErr) {
+    await finalizeClient.query('ROLLBACK');
+    console.error('Email Worker: Error finalizing job:', finalizeErr.message);
+    return false;
+  } finally {
+    finalizeClient.release();
   }
 }
 

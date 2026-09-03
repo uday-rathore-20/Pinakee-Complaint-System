@@ -62,6 +62,9 @@ const authenticateJWT = async (req, res, next) => {
 
     // Attach user profile information to request object
     req.user = user;
+    if (req.requestId) {
+      req.user.requestId = req.requestId;
+    }
     next();
   } catch (error) {
     console.error('Authentication middleware error:', error.message);

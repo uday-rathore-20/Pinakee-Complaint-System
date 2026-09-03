@@ -20,8 +20,9 @@ const logFormat = winston.format.combine(
 const consoleFormat = winston.format.combine(
   winston.format.colorize(),
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-  winston.format.printf(({ timestamp, level, message, stack, ...meta }) => {
-    let output = `[${timestamp}] ${level}: ${message}`;
+  winston.format.printf(({ timestamp, level, message, stack, requestId, ...meta }) => {
+    const reqTag = requestId ? ` [req:${requestId}]` : '';
+    let output = `[${timestamp}]${reqTag} ${level}: ${message}`;
     if (stack) {
       output += `\nStack: ${stack}`;
     }
@@ -62,13 +63,27 @@ const logger = winston.createLogger({
  * @param {Object} details - Action-specific attributes
  * @param {Object} [user] - Requester user context
  * @param {string} [ipAddress] - IP Address of request
+ * @param {string} [requestId] - Correlation request ID
  */
-logger.audit = (action, details = {}, user = null, ipAddress = null) => {
+logger.audit = (action, details = {}, user = null, ipAddress = null, requestId = null) => {
+  let reqId = requestId || details.requestId || user?.requestId || null;
+  if (!reqId) {
+    try {
+      const { requestContext } = require('../middleware/correlationId');
+      reqId = requestContext?.getStore()?.requestId || null;
+    } catch (e) {}
+  }
+  const logDetails = { ...details };
+  if (reqId && !logDetails.requestId) {
+    logDetails.requestId = reqId;
+  }
+
   logger.info({
     message: `Security Audit: ${action}`,
     isAudit: true,
     action,
-    details,
+    details: logDetails,
+    requestId: reqId,
     userId: user?.id || 'anonymous',
     userRole: user?.role || 'anonymous',
     userEmail: user?.email || 'anonymous',
@@ -80,13 +95,15 @@ logger.audit = (action, details = {}, user = null, ipAddress = null) => {
   if (dbPool) {
     const userIdVal = user && user.id && user.id !== 'anonymous' ? user.id : null;
     const description = `Security Audit: ${action}`;
-    const cleanDetails = { ...details };
+    const cleanDetails = { ...logDetails };
     // Security sanitization: strip sensitive items from details before DB insertion
     if (cleanDetails.password) delete cleanDetails.password;
     if (cleanDetails.new_password) delete cleanDetails.new_password;
     if (cleanDetails.token) delete cleanDetails.token;
     if (cleanDetails.password_hash) delete cleanDetails.password_hash;
     if (cleanDetails.reset_token) delete cleanDetails.reset_token;
+    if (cleanDetails.secret) delete cleanDetails.secret;
+    if (cleanDetails.jwt_secret) delete cleanDetails.jwt_secret;
 
     dbPool.query(
       'INSERT INTO audit_logs (user_id, action_type, description, ip_address, metadata_json) VALUES ($1, $2, $3, $4, $5)',

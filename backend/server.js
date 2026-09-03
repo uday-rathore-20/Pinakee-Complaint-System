@@ -1,15 +1,26 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 require('dotenv').config();
+
+// Production Environment Hardening Validation
+const { validateProductionEnv } = require('./utils/envValidator');
+validateProductionEnv();
+
 const dbPool = require('./config/db');
 const { sanitizePayloadMiddleware } = require('./utils/sanitize');
 const logger = require('./utils/logger');
 const httpLogger = require('./middleware/auditLogger');
+const correlationIdMiddleware = require('./middleware/correlationId');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Mount Request Correlation ID tracking middleware first
+app.use(correlationIdMiddleware);
 
 // Enable Helmet for secure HTTP response headers
 app.use(helmet());
@@ -18,19 +29,37 @@ app.use(helmet());
 app.use(httpLogger);
 
 // Configure CORS to restrict allowed origins from .env (whitelisting)
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
-  : ['http://localhost:5173', 'http://localhost:5000']; // default Vite port & production serving port
+const defaultAllowedOrigins = isProduction ? [] : [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+  'http://localhost:3000',
+  'http://localhost:5000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+  'http://127.0.0.1:5175',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5000'
+];
+
+const envAllowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean)
+  : [];
+
+const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...envAllowedOrigins]));
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  if (!isProduction && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    return true;
+  }
+  return false;
+};
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests) in development,
-    // but restrict in staging/production.
-    const isDevelopment = !process.env.NODE_ENV || process.env.NODE_ENV === 'development';
-    if (!origin && isDevelopment) {
-      return callback(null, true);
-    }
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
       logger.audit('CORS_BLOCKED', { origin: origin || 'none', allowedOrigins });
@@ -46,32 +75,20 @@ app.use(express.json());
 // Global input HTML/XSS sanitization firewall
 app.use(sanitizePayloadMiddleware);
 
-// Auth Rate Limiting to prevent login brute-forcing (max 100 requests per 15 minutes)
-const loginRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  handler: (req, res, next, options) => {
-    logger.audit('RATE_LIMIT_BLOCKED', {
-      ip: req.ip,
-      url: req.originalUrl,
-      method: req.method
-    }, null, req.ip);
-    res.status(options.statusCode).json(options.message);
-  },
-  message: {
-    success: false,
-    message: 'Too many login attempts, please try again after 15 minutes'
-  },
-  standardHeaders: true,
-  legacyHeaders: false
-});
+// Tiered Application & Auth Rate Limiters
+const { apiRateLimiter, loginRateLimiter } = require('./middleware/rateLimiter');
 
-// Apply rate limiter specifically to auth endpoints
+// 1. Apply global rate limiting across all /api endpoints
+app.use('/api', apiRateLimiter);
+
+// 2. Apply specialized strict rate limiter to authentication endpoints
 app.use('/api/auth', loginRateLimiter);
 
 // Routes
 const authRoutes = require('./routes/auth.routes');
 const usersRoutes = require('./routes/users.routes');
+const customersRoutes = require('./routes/customers.routes');
+const engineersRoutes = require('./routes/engineers.routes');
 const lookupsRoutes = require('./routes/lookups.routes');
 const complaintsRoutes = require('./routes/complaints.routes');
 const fcrRoutes = require('./routes/fcr.routes');
@@ -84,6 +101,8 @@ const settingsRoutes = require('./routes/settings.routes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/customers', customersRoutes);
+app.use('/api/engineers', engineersRoutes);
 app.use('/api', lookupsRoutes);
 app.use('/api/complaints', complaintsRoutes);
 app.use('/api/complaints', fcrRoutes);
@@ -173,12 +192,14 @@ app.all('/api/*', (req, res) => {
 
 // Centralized Error Handling Middleware (hides stack traces in production)
 app.use((err, req, res, next) => {
-  logger.error('Unhandled Error:', { message: err.message, stack: err.stack });
+  const requestId = req.requestId || req.id || 'unknown';
+  logger.error('Unhandled Error:', { requestId, message: err.message, stack: err.stack });
 
   const isProduction = process.env.NODE_ENV === 'production';
   return res.status(err.status || 500).json({
     success: false,
     message: isProduction ? 'Internal Server Error' : err.message,
+    requestId,
     ...(isProduction ? {} : { stack: err.stack })
   });
 });

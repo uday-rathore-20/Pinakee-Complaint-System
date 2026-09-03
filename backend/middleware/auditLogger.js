@@ -1,10 +1,13 @@
 const morgan = require('morgan');
 const logger = require('../utils/logger');
 
-// Production format logs structured details; development format is short and readable
+// Register custom Morgan token for correlation requestId
+morgan.token('req-id', (req) => req.requestId || req.id || '-');
+
+// Production format logs structured details with correlation ID; development format includes requestId
 const formatString = process.env.NODE_ENV === 'production'
-  ? ':remote-addr - :method :url :status - :response-time ms - :user-agent'
-  : 'dev';
+  ? ':remote-addr - [:req-id] :method :url :status - :response-time ms - :user-agent'
+  : '[:req-id] :method :url :status - :response-time ms';
 
 const httpLogger = morgan(formatString, {
   stream: {

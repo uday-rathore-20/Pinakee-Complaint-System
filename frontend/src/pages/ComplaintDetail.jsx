@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
+import DigitalFcrReport from '../components/DigitalFcrReport';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 const formatPausedDuration = (duration) => {
   if (!duration) return '0s';
@@ -50,6 +52,9 @@ const ComplaintDetail = () => {
 
   // Data States
   const [complaint, setComplaint] = useState(null);
+  const [customerInfo, setCustomerInfo] = useState(null);
+  const [engineerInfo, setEngineerInfo] = useState(null);
+  const [copyStatus, setCopyStatus] = useState('');
   const [comments, setComments] = useState([]);
   const [history, setHistory] = useState([]);
   const [attachments, setAttachments] = useState([]);
@@ -58,6 +63,7 @@ const ComplaintDetail = () => {
 
   // Lookup collections for controls
   const [statuses, setStatuses] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [agents, setAgents] = useState([]);
 
@@ -65,9 +71,11 @@ const ComplaintDetail = () => {
   const [commentText, setCommentText] = useState('');
   const [commentInternal, setCommentInternal] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedDept, setSelectedDept] = useState('');
   const [selectedAgent, setSelectedAgent] = useState('');
   const [transitionRemarks, setTransitionRemarks] = useState('');
+  const [updatingCategory, setUpdatingCategory] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [submittingComment, setSubmittingComment] = useState(false);
@@ -76,6 +84,16 @@ const ComplaintDetail = () => {
   const [claimingTicket, setClaimingTicket] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deletingComplaint, setDeletingComplaint] = useState(false);
+
+  // Milestone 1 Workflow Modal States
+  const [showHoldModal, setShowHoldModal] = useState(false);
+  const [holdReasonInput, setHoldReasonInput] = useState('');
+  const [showReopenModal, setShowReopenModal] = useState(false);
+  const [reopenReasonInput, setReopenReasonInput] = useState('');
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReasonInput, setCancelReasonInput] = useState('');
+  const [submittingWorkflowAction, setSubmittingWorkflowAction] = useState(false);
+
   const [fcr, setFcr] = useState(null);
   const [fcrLoading, setFcrLoading] = useState(true);
   const [fcrVisitDate, setFcrVisitDate] = useState('');
@@ -98,8 +116,29 @@ const ComplaintDetail = () => {
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [feedbackError, setFeedbackError] = useState('');
 
+  // Milestone 3: Field Travel, Reassignment & Evidence States
+  const [evidenceStage, setEvidenceStage] = useState('GENERAL');
+  const [fcrDetails, setFcrDetails] = useState(null);
+  const [reassignmentRequests, setReassignmentRequests] = useState([]);
+  const [showReassignRequestModal, setShowReassignRequestModal] = useState(false);
+  const [reassignReasonInput, setReassignReasonInput] = useState('');
+  const [showReassignApproveModal, setShowReassignApproveModal] = useState(false);
+  const [reassignTargetEngineer, setReassignTargetEngineer] = useState('');
+  const [reassignDecisionReason, setReassignDecisionReason] = useState('');
+  const [showReassignRejectModal, setShowReassignRejectModal] = useState(false);
+  const [reassignRejectReason, setReassignRejectReason] = useState('');
+  const [submittingReassignAction, setSubmittingReassignAction] = useState(false);
+  const [travelingAction, setTravelingAction] = useState(false);
+
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
+
+  const handleCopy = (text, fieldName) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopyStatus(fieldName);
+    setTimeout(() => setCopyStatus(''), 2000);
+  };
 
   const fetchComplaintDetails = async () => {
     try {
@@ -108,17 +147,164 @@ const ComplaintDetail = () => {
 
       if (res.ok && result.success) {
         setComplaint(result.data.complaint);
+        setCustomerInfo(result.data.customer || null);
+        setEngineerInfo(result.data.engineer || null);
         setComments(result.data.comments);
         setHistory(result.data.status_history);
 
         setSelectedStatus(result.data.complaint.status_id);
+        setSelectedCategory(result.data.complaint.category_id || '');
         setSelectedDept(result.data.complaint.department_id || '');
         setSelectedAgent(result.data.complaint.assigned_to_id || '');
       } else {
         setError(result.message || 'Failed to load complaint details.');
       }
+
+      // Also fetch FCR & Reassignment Requests
+      try {
+        const fcrRes = await authFetch(`/complaints/${id}/fcr`);
+        const fcrJson = await fcrRes.json();
+        if (fcrJson.success) {
+          setFcrDetails(fcrJson.data?.fcr || null);
+          setReassignmentRequests(fcrJson.data?.reassignmentRequests || []);
+        }
+      } catch (fcrErr) {
+        console.error('Error fetching FCR details in page:', fcrErr);
+      }
+
     } catch (err) {
       setError('Connection to server failed.');
+    }
+  };
+
+  // Milestone 3 Handlers: Field Travel
+  const handleStartTravel = async () => {
+    try {
+      setTravelingAction(true);
+      setActionError('');
+      const res = await authFetch(`/complaints/${id}/travel/start`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to record travel start');
+      }
+      await fetchComplaintDetails();
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setTravelingAction(false);
+    }
+  };
+
+  const handleReachedSite = async () => {
+    try {
+      setTravelingAction(true);
+      setActionError('');
+      const res = await authFetch(`/complaints/${id}/travel/reached`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to record site arrival');
+      }
+      await fetchComplaintDetails();
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setTravelingAction(false);
+    }
+  };
+
+  // Milestone 3 Handlers: Reassignment Request Workflow
+  const handleRequestReassignment = async (e) => {
+    if (e) e.preventDefault();
+    if (!reassignReasonInput.trim()) {
+      setActionError('Please specify the mandatory reason for requesting reassignment');
+      return;
+    }
+    try {
+      setSubmittingReassignAction(true);
+      setActionError('');
+      const res = await authFetch(`/complaints/${id}/reassignment/request`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: reassignReasonInput.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to submit reassignment request');
+      }
+      setShowReassignRequestModal(false);
+      setReassignReasonInput('');
+      await fetchComplaintDetails();
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setSubmittingReassignAction(false);
+    }
+  };
+
+  const handleApproveReassignment = async (e) => {
+    if (e) e.preventDefault();
+    if (!reassignTargetEngineer) {
+      setActionError('Please select a new engineer to assign');
+      return;
+    }
+    try {
+      setSubmittingReassignAction(true);
+      setActionError('');
+      const res = await authFetch(`/complaints/${id}/reassignment/approve`, {
+        method: 'POST',
+        body: JSON.stringify({
+          new_engineer_id: parseInt(reassignTargetEngineer, 10),
+          decision_reason: reassignDecisionReason.trim() || 'Approved by administrator'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to approve reassignment');
+      }
+      setShowReassignApproveModal(false);
+      setReassignDecisionReason('');
+      setReassignTargetEngineer('');
+      await fetchComplaintDetails();
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setSubmittingReassignAction(false);
+    }
+  };
+
+  const handleRejectReassignment = async (e) => {
+    if (e) e.preventDefault();
+    if (!reassignRejectReason.trim()) {
+      setActionError('Please provide a mandatory decision reason for rejecting the request');
+      return;
+    }
+    try {
+      setSubmittingReassignAction(true);
+      setActionError('');
+      const res = await fetch(`http://localhost:5000/api/complaints/${id}/reassignment/reject`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          decision_reason: reassignRejectReason.trim()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to reject reassignment');
+      }
+      setShowReassignRejectModal(false);
+      setReassignRejectReason('');
+      await fetchComplaintDetails();
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setSubmittingReassignAction(false);
     }
   };
 
@@ -127,6 +313,10 @@ const ComplaintDetail = () => {
       const statusRes = await authFetch('/statuses');
       const statusesResult = await statusRes.json();
       if (statusesResult.success) setStatuses(statusesResult.data);
+
+      const catRes = await authFetch('/categories');
+      const categoriesResult = await catRes.json();
+      if (categoriesResult.success) setCategories(categoriesResult.data);
 
       // Staff roles can load engineers for assignment list
       if (user.role === 'ADMIN' || user.role === 'DEPT_HEAD') {
@@ -360,6 +550,31 @@ const ComplaintDetail = () => {
     }
   };
 
+  const handleUpdateCategory = async (e) => {
+    e.preventDefault();
+    setActionError('');
+    setUpdatingCategory(true);
+
+    try {
+      const res = await authFetch(`/complaints/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          category_id: selectedCategory ? parseInt(selectedCategory, 10) : null
+        })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        await fetchComplaintDetails();
+      } else {
+        setActionError(result.message || 'Failed to update category.');
+      }
+    } catch (err) {
+      setActionError('Connection failure updating category.');
+    } finally {
+      setUpdatingCategory(false);
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
       await fetchComplaintDetails();
@@ -421,6 +636,9 @@ const ComplaintDetail = () => {
 
     const formData = new FormData();
     formData.append('file', selectedFile);
+    if (user.role !== 'CUSTOMER') {
+      formData.append('evidence_stage', evidenceStage);
+    }
 
     try {
       const res = await authFetch(`/complaints/${id}/attachments`, {
@@ -431,6 +649,7 @@ const ComplaintDetail = () => {
 
       if (res.ok && result.success) {
         setSelectedFile(null);
+        setEvidenceStage('GENERAL');
         document.getElementById('file-upload-input').value = '';
         await fetchAttachments();
         await fetchComplaintDetails(); // Refresh comments list
@@ -589,45 +808,165 @@ const ComplaintDetail = () => {
     }
   };
 
-  const handleClaimTicketDetails = async () => {
+  const handleAcceptComplaint = async () => {
     setActionError('');
-    setClaimingTicket(true);
+    setSubmittingWorkflowAction(true);
     try {
       const res = await authFetch(`/complaints/${id}/claim`, {
         method: 'PATCH'
       });
       const result = await res.json();
       if (res.ok && result.success) {
-        await fetchComplaintDetails(); // Refresh ticket metadata and history
+        await fetchComplaintDetails();
       } else {
-        setActionError(result.message || 'Failed to claim ticket.');
+        setActionError(result.message || 'Failed to accept complaint.');
       }
     } catch (err) {
-      setActionError('Network error claiming ticket.');
+      setActionError('Network error accepting complaint.');
     } finally {
-      setClaimingTicket(false);
+      setSubmittingWorkflowAction(false);
     }
   };
 
-  const handleDeleteComplaint = async () => {
-    setDeletingComplaint(true);
+  const handleStartWork = async () => {
     setActionError('');
+    setSubmittingWorkflowAction(true);
     try {
-      const res = await authFetch(`/complaints/${id}`, {
-        method: 'DELETE'
+      const inProgStatus = statuses.find(s => s.name === 'In Progress');
+      if (!inProgStatus) throw new Error('In Progress status not found');
+      const res = await authFetch(`/complaints/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status_id: inProgStatus.id,
+          remarks: 'Engineer started active work'
+        })
       });
       const result = await res.json();
       if (res.ok && result.success) {
-        navigate('/complaints');
+        await fetchComplaintDetails();
       } else {
-        setActionError(result.message || 'Failed to delete complaint.');
-        setShowDeleteModal(false);
+        setActionError(result.message || 'Failed to start work.');
       }
     } catch (err) {
-      setActionError('Network error deleting complaint.');
-      setShowDeleteModal(false);
+      setActionError(err.message || 'Network error starting work.');
     } finally {
-      setDeletingComplaint(false);
+      setSubmittingWorkflowAction(false);
+    }
+  };
+
+  const handlePutOnHold = async (e) => {
+    e.preventDefault();
+    if (!holdReasonInput.trim()) {
+      setActionError('A valid hold reason is required.');
+      return;
+    }
+    setActionError('');
+    setSubmittingWorkflowAction(true);
+    try {
+      const holdStatus = statuses.find(s => s.name === 'On Hold');
+      if (!holdStatus) throw new Error('On Hold status not found');
+      const res = await authFetch(`/complaints/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status_id: holdStatus.id,
+          hold_reason: holdReasonInput.trim(),
+          remarks: holdReasonInput.trim()
+        })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setShowHoldModal(false);
+        setHoldReasonInput('');
+        await fetchComplaintDetails();
+      } else {
+        setActionError(result.message || 'Failed to put ticket on hold.');
+      }
+    } catch (err) {
+      setActionError(err.message || 'Network error putting ticket on hold.');
+    } finally {
+      setSubmittingWorkflowAction(false);
+    }
+  };
+
+  const handleResumeWork = async () => {
+    setActionError('');
+    setSubmittingWorkflowAction(true);
+    try {
+      const inProgStatus = statuses.find(s => s.name === 'In Progress');
+      if (!inProgStatus) throw new Error('In Progress status not found');
+      const res = await authFetch(`/complaints/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status_id: inProgStatus.id,
+          remarks: 'Work resumed by engineer'
+        })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        await fetchComplaintDetails();
+      } else {
+        setActionError(result.message || 'Failed to resume work.');
+      }
+    } catch (err) {
+      setActionError(err.message || 'Network error resuming work.');
+    } finally {
+      setSubmittingWorkflowAction(false);
+    }
+  };
+
+  const handleReopenComplaint = async (e) => {
+    e.preventDefault();
+    if (!reopenReasonInput.trim()) {
+      setActionError('Please specify why the problem still exists.');
+      return;
+    }
+    setActionError('');
+    setSubmittingWorkflowAction(true);
+    try {
+      const res = await authFetch(`/complaints/${id}/reopen`, {
+        method: 'POST',
+        body: JSON.stringify({
+          reason: reopenReasonInput.trim()
+        })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setShowReopenModal(false);
+        setReopenReasonInput('');
+        await fetchComplaintDetails();
+      } else {
+        setActionError(result.message || 'Failed to reopen complaint.');
+      }
+    } catch (err) {
+      setActionError(err.message || 'Network error reopening complaint.');
+    } finally {
+      setSubmittingWorkflowAction(false);
+    }
+  };
+
+  const handleCancelComplaint = async (e) => {
+    if (e) e.preventDefault();
+    setActionError('');
+    setSubmittingWorkflowAction(true);
+    try {
+      const res = await authFetch(`/complaints/${id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({
+          reason: cancelReasonInput.trim() || 'Cancelled by user'
+        })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setShowCancelModal(false);
+        setCancelReasonInput('');
+        await fetchComplaintDetails();
+      } else {
+        setActionError(result.message || 'Failed to cancel complaint.');
+      }
+    } catch (err) {
+      setActionError('Network error cancelling complaint.');
+    } finally {
+      setSubmittingWorkflowAction(false);
     }
   };
 
@@ -647,42 +986,48 @@ const ComplaintDetail = () => {
   }
 
   // Display badges keys
-  const priorityKey = complaint.priority.toLowerCase();
-  const statusKey = complaint.status.toLowerCase().replace(/ /g, '-');
+  const priorityKey = complaint.priority ? complaint.priority.toLowerCase() : 'medium';
+  const statusKey = complaint.status ? complaint.status.toLowerCase().replace(/ /g, '-') : 'pending';
   const isStaff = user.role !== 'CUSTOMER';
   const isAdminOrHead = user.role === 'ADMIN' || (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id);
 
   const allowedOptions = [];
   if (complaint && statuses.length) {
     const current = complaint.status;
-    if (current !== 'Closed') {
+    if (current !== 'Closed' && current !== 'Cancelled') {
       if (user.role === 'CUSTOMER') {
-        if (current === 'Resolved') {
+        if (current === 'Pending') {
+          allowedOptions.push(...statuses.filter(s => s.name === 'Cancelled'));
+        } else if (current === 'Resolved') {
           allowedOptions.push(...statuses.filter(s => s.name === 'Closed'));
         }
       } else if (user.role === 'ENGINEER' || user.role === 'AGENT') {
         if (complaint.assigned_to_id === user.id) {
           if (current === 'Assigned') {
-            allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
-          }
-          if (['In Progress', 'Assigned'].includes(current)) {
-            allowedOptions.push(...statuses.filter(s => ['On Hold', 'Waiting on Customer'].includes(s.name)));
-          }
-          if (['On Hold', 'Waiting on Customer'].includes(current)) {
+            allowedOptions.push(...statuses.filter(s => s.name === 'Accepted'));
+          } else if (current === 'Accepted') {
+            allowedOptions.push(...statuses.filter(s => ['In Progress', 'On Hold'].includes(s.name)));
+          } else if (current === 'In Progress') {
+            allowedOptions.push(...statuses.filter(s => s.name === 'On Hold'));
+          } else if (current === 'On Hold') {
             allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
           }
         }
       } else if (user.role === 'ADMIN' || (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id)) {
-        if (current === 'Assigned') {
+        if (current === 'Pending') {
+          allowedOptions.push(...statuses.filter(s => ['Assigned', 'Cancelled'].includes(s.name)));
+        } else if (current === 'Admin Review') {
+          allowedOptions.push(...statuses.filter(s => s.name === 'Assigned'));
+        } else if (current === 'Assigned') {
+          allowedOptions.push(...statuses.filter(s => s.name === 'Accepted'));
+        } else if (current === 'Accepted') {
+          allowedOptions.push(...statuses.filter(s => ['In Progress', 'On Hold'].includes(s.name)));
+        } else if (current === 'In Progress') {
+          allowedOptions.push(...statuses.filter(s => s.name === 'On Hold'));
+        } else if (current === 'On Hold') {
           allowedOptions.push(...statuses.filter(s => s.name === 'In Progress'));
         } else if (current === 'Resolved') {
           allowedOptions.push(...statuses.filter(s => s.name === 'Closed'));
-        }
-        if (['In Progress', 'Assigned'].includes(current)) {
-          allowedOptions.push(...statuses.filter(s => ['On Hold', 'Waiting on Customer'].includes(s.name)));
-        }
-        if (['On Hold', 'Waiting on Customer'].includes(current)) {
-          allowedOptions.push(...statuses.filter(s => ['In Progress', 'Assigned'].includes(s.name)));
         }
       }
     }
@@ -708,14 +1053,50 @@ const ComplaintDetail = () => {
             <button
               type="button"
               className="btn btn-danger"
-              onClick={() => setShowDeleteModal(true)}
+              onClick={() => setShowCancelModal(true)}
               style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
             >
-              Delete Complaint
+              Cancel Complaint
             </button>
           )}
         </div>
       </div>
+
+      {/* Admin Review Banner */}
+      {complaint.status === 'Admin Review' && (
+        <div
+          className="alert alert-warning"
+          style={{
+            marginBottom: '1.5rem',
+            background: '#faf5ff',
+            border: '1px solid #d8b4fe',
+            color: '#6b21a8',
+            padding: '1.15rem',
+            borderRadius: '8px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '0.85rem'
+          }}
+        >
+          <span style={{ fontSize: '1.6rem', lineHeight: 1 }}>⚠️</span>
+          <div style={{ flexGrow: 1 }}>
+            <h4 style={{ margin: 0, fontWeight: 'bold', color: '#581c87', fontSize: '1rem' }}>
+              Customer Reopened Ticket — Administrative Review Required
+            </h4>
+            <div style={{ marginTop: '0.4rem', fontSize: '0.9rem', color: '#6b21a8' }}>
+              <strong>Customer Rejection Reason:</strong> "{complaint.reopen_reason || 'Problem still exists'}"
+            </div>
+            {complaint.assignee_first_name && (
+              <div style={{ marginTop: '0.25rem', fontSize: '0.82rem', color: '#7e22ce' }}>
+                Previous Assigned Engineer: <strong>{complaint.assignee_first_name} {complaint.assignee_last_name}</strong>
+              </div>
+            )}
+            <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.82rem', color: '#9333ea' }}>
+              Please review the service report & timeline, then reassign an engineer to proceed with resolution.
+            </p>
+          </div>
+        </div>
+      )}
 
       {complaint.is_escalated && (
         <div
@@ -773,6 +1154,152 @@ const ComplaintDetail = () => {
         </div>
       )}
 
+      {/* Milestone 4: Resolution SLA Confirmation & Auto-Close Notice Banner */}
+      {complaint.status === 'Resolved' && (
+        <div
+          className="alert alert-info"
+          style={{
+            marginBottom: '1.5rem',
+            background: '#f0fdf4',
+            border: '1px solid #86efac',
+            color: '#166534',
+            padding: '1.15rem',
+            borderRadius: '8px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '0.85rem'
+          }}
+        >
+          <span style={{ fontSize: '1.6rem', lineHeight: 1 }}>⏱️</span>
+          <div style={{ flexGrow: 1 }}>
+            <h4 style={{ margin: 0, fontWeight: 'bold', color: '#14532d', fontSize: '1rem' }}>
+              Service Completed — Awaiting Customer Confirmation
+            </h4>
+            <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.875rem' }}>
+              The field engineer has completed on-site service and submitted the Service Call Report.
+              {fcrDetails?.work_close_time && (
+                <span> Resolved on: <strong>{new Date(fcrDetails.work_close_time).toLocaleString()}</strong>.</span>
+              )}
+            </p>
+            {fcrDetails?.work_close_time && (() => {
+              const resolvedTime = new Date(fcrDetails.work_close_time).getTime();
+              const now = Date.now();
+              const elapsedMs = Math.max(0, now - resolvedTime);
+              const elapsedHrs = Math.floor(elapsedMs / (1000 * 60 * 60));
+              const remainingHrs = Math.max(0, 72 - elapsedHrs);
+              return (
+                <div style={{ marginTop: '0.4rem', fontSize: '0.82rem', color: '#15803d' }}>
+                  <span>Elapsed: <strong>{elapsedHrs} hrs</strong> | Auto-closes in approximately: <strong>{remainingHrs} hrs</strong> (72h policy).</span>
+                  {(fcrDetails.reminder_24h_sent_at || fcrDetails.reminder_48h_sent_at) && (
+                    <div style={{ marginTop: '0.25rem', display: 'flex', gap: '0.5rem', fontSize: '0.75rem' }}>
+                      {fcrDetails.reminder_24h_sent_at && <span className="badge" style={{ background: '#bbf7d0', color: '#166534' }}>✓ 24h Reminder Sent</span>}
+                      {fcrDetails.reminder_48h_sent_at && <span className="badge" style={{ background: '#fed7aa', color: '#9a3412' }}>✓ 48h Reminder Sent</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Milestone 4: Closed Ticket Resolution Source Banner */}
+      {complaint.status === 'Closed' && (
+        <div
+          className="alert alert-secondary"
+          style={{
+            marginBottom: '1.5rem',
+            background: fcrDetails?.auto_closed_at ? '#f8fafc' : '#f0fdf4',
+            border: fcrDetails?.auto_closed_at ? '1px solid #cbd5e1' : '1px solid #bbf7d0',
+            color: fcrDetails?.auto_closed_at ? '#475569' : '#166534',
+            padding: '1rem',
+            borderRadius: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem'
+          }}
+        >
+          <span style={{ fontSize: '1.5rem' }}>{fcrDetails?.auto_closed_at ? '🤖' : '✅'}</span>
+          <div>
+            <h4 style={{ margin: 0, fontWeight: 'bold', fontSize: '0.95rem' }}>
+              {fcrDetails?.auto_closed_at ? 'Ticket Closed via System Auto-Closure' : 'Ticket Closed via Customer Confirmation'}
+            </h4>
+            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.82rem' }}>
+              {fcrDetails?.auto_closed_at ? (
+                <span>Closed automatically after 72 hours of customer inactivity following service resolution on <strong>{new Date(fcrDetails.auto_closed_at).toLocaleString()}</strong>.</span>
+              ) : (
+                <span>Confirmed and closed by customer on <strong>{fcrDetails?.customer_confirmed_at ? new Date(fcrDetails.customer_confirmed_at).toLocaleString() : 'sign-off'}</strong>{fcrDetails?.customer_rating ? ` (Rating: ${fcrDetails.customer_rating}/5)` : ''}.</span>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Reassignment Request Notice Banner */}
+      {(() => {
+        const pendingReassign = reassignmentRequests.find(r => r.status === 'PENDING');
+        if (!pendingReassign) return null;
+        return (
+          <div
+            className="alert alert-warning"
+            style={{
+              marginBottom: '1.5rem',
+              background: '#eff6ff',
+              border: '1px solid #93c5fd',
+              color: '#1e40af',
+              padding: '1.15rem',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '0.85rem'
+            }}
+          >
+            <span style={{ fontSize: '1.6rem', lineHeight: 1 }}>🔄</span>
+            <div style={{ flexGrow: 1 }}>
+              <h4 style={{ margin: 0, fontWeight: 'bold', color: '#1e3a8a', fontSize: '1rem' }}>
+                Reassignment Requested by Field Engineer
+              </h4>
+              <div style={{ marginTop: '0.4rem', fontSize: '0.9rem', color: '#1e40af' }}>
+                <strong>Engineer:</strong> {pendingReassign.engineer_first_name} {pendingReassign.engineer_last_name}
+              </div>
+              <div style={{ marginTop: '0.2rem', fontSize: '0.9rem', color: '#1e40af' }}>
+                <strong>Reason:</strong> "{pendingReassign.reason}"
+              </div>
+              <div style={{ marginTop: '0.2rem', fontSize: '0.75rem', color: '#3b82f6' }}>
+                Requested on {new Date(pendingReassign.requested_at).toLocaleString()}
+              </div>
+              {(user.role === 'ADMIN' || user.role === 'DEPT_HEAD') && (
+                <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      setReassignTargetEngineer('');
+                      setReassignDecisionReason('');
+                      setShowReassignApproveModal(true);
+                    }}
+                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.82rem' }}
+                  >
+                    Approve & Reassign
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={() => {
+                      setReassignRejectReason('');
+                      setShowReassignRejectModal(true);
+                    }}
+                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.82rem', background: '#ef4444', borderColor: '#ef4444' }}
+                  >
+                    Reject Request
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {actionError && <div className="alert alert-danger">{actionError}</div>}
 
       <div className="section-grid">
@@ -787,277 +1314,69 @@ const ComplaintDetail = () => {
             </p>
           </div>
 
-          {/* FCR Card */}
-          {!fcrLoading && (
-            <div className="card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-                <h3 style={{ margin: '0' }}>Digital Field Call Report (FCR)</h3>
-                {fcr && (fcr.status === 'Submitted' || fcr.status === 'Finalized') && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
-                    onClick={handleDownloadPdf}
-                  >
-                    Download PDF
-                  </button>
-                )}
+          {/* Digital FCR / Service Report */}
+          <ErrorBoundary
+            fallback={({ error: _error, reset }) => (
+              <div className="card" role="alert" style={{ padding: '2rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>⚠️</div>
+                <h4 style={{ margin: '0 0 0.5rem', color: 'var(--text-main)' }}>
+                  Service Report Unavailable
+                </h4>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: '0 0 1rem' }}>
+                  This section encountered an error and could not be displayed.
+                </p>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={reset}
+                >
+                  Try Again
+                </button>
               </div>
-
-              {/* CASE 1: ENGINEER creating/editing draft */}
-              {(user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id && (!fcr || fcr.status === 'Draft') && (
-                <form onSubmit={handleSubmitFcrAction}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-                    <div className="form-group" style={{ margin: '0' }}>
-                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Visit Date</label>
-                      <input
-                        type="date"
-                        className="form-input"
-                        value={fcrVisitDate}
-                        onChange={(e) => setFcrVisitDate(e.target.value)}
-                        required
-                      />
-                    </div>
-                    <div className="form-group" style={{ margin: '0' }}>
-                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Start Time</label>
-                      <input
-                        type="time"
-                        className="form-input"
-                        value={fcrStartTime}
-                        onChange={(e) => setFcrStartTime(e.target.value)}
-                        required
-                      />
-                    </div>
-                    <div className="form-group" style={{ margin: '0' }}>
-                      <label className="form-label" style={{ fontSize: '0.8rem' }}>End Time</label>
-                      <input
-                        type="time"
-                        className="form-input"
-                        value={fcrEndTime}
-                        onChange={(e) => setFcrEndTime(e.target.value)}
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label" style={{ fontSize: '0.8rem' }}>Diagnosis & Findings</label>
-                    <textarea
-                      className="form-input"
-                      rows="2"
-                      value={fcrDiagnosis}
-                      onChange={(e) => setFcrDiagnosis(e.target.value)}
-                      placeholder="Detail the cause/origin of the problem..."
-                      required
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label" style={{ fontSize: '0.8rem' }}>Action Taken</label>
-                    <textarea
-                      className="form-input"
-                      rows="2"
-                      value={fcrActionTaken}
-                      onChange={(e) => setFcrActionTaken(e.target.value)}
-                      placeholder="Detail the steps performed to resolve..."
-                      required
-                    />
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-                    <div className="form-group" style={{ margin: '0' }}>
-                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Activity Code</label>
-                      <select
-                        className="form-input"
-                        value={fcrActivityCode}
-                        onChange={(e) => setFcrActivityCode(e.target.value)}
-                        required
-                      >
-                        <option value="ACT-01">ACT-01: Diagnostics & Analysis</option>
-                        <option value="ACT-02">ACT-02: Repairs & Restorations</option>
-                        <option value="ACT-03">ACT-03: Part Replacement</option>
-                        <option value="ACT-04">ACT-04: Preventive Maintenance</option>
-                      </select>
-                    </div>
-                    <div className="form-group" style={{ margin: '0' }}>
-                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Parts Replaced (Optional)</label>
-                      <input
-                        type="text"
-                        className="form-input"
-                        value={fcrPartsReplaced}
-                        onChange={(e) => setFcrPartsReplaced(e.target.value)}
-                        placeholder="e.g. SSD, RAM, Battery"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label" style={{ fontSize: '0.8rem' }}>Suggestions / Recommendations (Optional)</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      value={fcrSuggestions}
-                      onChange={(e) => setFcrSuggestions(e.target.value)}
-                      placeholder="Suggestions for preventing future occurrences..."
-                    />
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.25rem' }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={handleSaveFcrDraft}
-                      disabled={submittingFcrAction}
-                    >
-                      Save Draft
-                    </button>
-                    <button
-                      type="submit"
-                      className="btn btn-primary"
-                      disabled={submittingFcrAction}
-                    >
-                      Submit FCR
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {/* CASE 2: Customer confirming / signing off */}
-              {user.role === 'CUSTOMER' && complaint.created_by_id === user.id && fcr && fcr.status === 'Submitted' && (
-                <form onSubmit={handleConfirmFcrAction}>
-                  <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: '6px', marginBottom: '1rem', border: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
-                    <div style={{ marginBottom: '0.5rem' }}><strong>Visit Date:</strong> {new Date(fcr.visit_date).toLocaleDateString()} ({fcr.visit_start_time} - {fcr.visit_end_time})</div>
-                    <div style={{ marginBottom: '0.5rem' }}><strong>Diagnosis:</strong> {fcr.diagnosis}</div>
-                    <div style={{ marginBottom: '0.5rem' }}><strong>Action Taken:</strong> {fcr.action_taken}</div>
-                    {fcr.parts_replaced && <div style={{ marginBottom: '0.5rem' }}><strong>Parts Replaced:</strong> {fcr.parts_replaced}</div>}
-                    <div style={{ marginBottom: '0.5rem' }}><strong>Activity Code:</strong> {fcr.activity_code}</div>
-                    {fcr.suggestions && <div><strong>Engineer Suggestions:</strong> {fcr.suggestions}</div>}
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
-                    <div className="form-group" style={{ margin: '0' }}>
-                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Satisfaction</label>
-                      <select
-                        className="form-input"
-                        value={fcrRating}
-                        onChange={(e) => setFcrRating(e.target.value)}
-                        required
-                      >
-                        <option value="5">5 ★ (Excellent)</option>
-                        <option value="4">4 ★ (Good)</option>
-                        <option value="3">3 ★ (Average)</option>
-                        <option value="2">2 ★ (Poor)</option>
-                        <option value="1">1 ★ (Very Poor)</option>
-                      </select>
-                    </div>
-                    <div className="form-group" style={{ margin: '0' }}>
-                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Feedback / Sign-off Comments</label>
-                      <input
-                        type="text"
-                        className="form-input"
-                        value={fcrFeedback}
-                        onChange={(e) => setFcrFeedback(e.target.value)}
-                        placeholder="Leave feedback or sign-off message..."
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-                    <button
-                      type="submit"
-                      className="btn btn-primary"
-                      disabled={submittingFcrAction}
-                    >
-                      Confirm Resolution & Close Ticket
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {/* CASE 3: Read-only submitted or finalized view for Agent/Admin/Customer */}
-              {fcr && (fcr.status === 'Finalized' || (fcr.status === 'Submitted' && user.role !== 'CUSTOMER')) && (
-                <div style={{ fontSize: '0.9rem' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1rem' }}>
-                    <div>
-                      <div style={{ marginBottom: '0.5rem', color: 'var(--text-muted)' }}>Service Timing</div>
-                      <div style={{ fontWeight: 'bold' }}>Date: {new Date(fcr.visit_date).toLocaleDateString()}</div>
-                      <div>Time: {fcr.visit_start_time} - {fcr.visit_end_time}</div>
-                    </div>
-                    <div>
-                      <div style={{ marginBottom: '0.5rem', color: 'var(--text-muted)' }}>Service Code & Replaced Parts</div>
-                      <div style={{ fontWeight: 'bold' }}>Activity Code: {fcr.activity_code}</div>
-                      <div>Parts Replaced: {fcr.parts_replaced || 'None'}</div>
-                    </div>
-                  </div>
-
-                  <div style={{ marginBottom: '1rem' }}>
-                    <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Diagnosis</div>
-                    <div style={{ background: '#f8fafc', padding: '0.75rem', borderRadius: '4px', borderLeft: '3px solid var(--primary-color)' }}>
-                      {fcr.diagnosis}
-                    </div>
-                  </div>
-
-                  <div style={{ marginBottom: '1rem' }}>
-                    <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Action Taken</div>
-                    <div style={{ background: '#f8fafc', padding: '0.75rem', borderRadius: '4px', borderLeft: '3px solid var(--primary-color)' }}>
-                      {fcr.action_taken}
-                    </div>
-                  </div>
-
-                  {fcr.suggestions && (
-                    <div style={{ marginBottom: '1rem' }}>
-                      <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Engineer Recommendations</div>
-                      <div>{fcr.suggestions}</div>
-                    </div>
-                  )}
-
-                  {fcr.status === 'Finalized' ? (
-                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem', background: '#f0fdf4', padding: '0.75rem', borderRadius: '6px', border: '1px solid #bbf7d0' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', color: '#16a34a', marginBottom: '0.25rem' }}>
-                        <span>Customer Confirmation Sign-off</span>
-                        <span>Rating: {'★'.repeat(fcr.customer_rating)}</span>
-                      </div>
-                      <div>Comments: "{fcr.customer_feedback || 'No comments left'}"</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-                        Confirmed on {new Date(fcr.customer_confirmed_at).toLocaleString()}
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                      Awaiting customer confirmation and sign-off.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* CASE 4: Customer viewing before FCR is submitted (draft status) */}
-              {user.role === 'CUSTOMER' && (!fcr || fcr.status === 'Draft') && (
-                <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: '0' }}>
-                  The engineer has not submitted the service call report for this complaint yet.
-                </p>
-              )}
-
-              {/* CASE 5: Staff view where FCR draft is not yet created */}
-              {user.role !== 'CUSTOMER' && ((user.role !== 'ENGINEER' && user.role !== 'AGENT') || complaint.assigned_to_id !== user.id) && !fcr && (
-                <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: '0' }}>
-                  No service call report has been registered for this complaint.
-                </p>
-              )}
-
-              {/* CASE 6: Assigned Engineer when FCR is submitted */}
-              {(user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id && fcr && fcr.status === 'Submitted' && (
-                <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', margin: '0', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
-                  You have submitted this FCR. It is now read-only pending customer sign-off.
-                </p>
-              )}
-            </div>
-          )}
+            )}
+          >
+            <DigitalFcrReport
+              complaintId={id}
+              complaintStatus={complaint.status}
+              onRefresh={fetchComplaintDetails}
+              onDownloadPdf={handleDownloadPdf}
+            />
+          </ErrorBoundary>
 
           {/* Attachments Card */}
           <div className="card">
             <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
-              File Attachments ({attachments.length})
+              File Attachments & Evidence ({attachments.length})
             </h3>
+
+            {/* Evidence Photo Checklist for High and Critical priority complaints */}
+            {['High', 'Critical'].includes(complaint.priority) && (() => {
+              const isImg = (m) => ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'].includes(m);
+              const hasBefore = attachments.some(a => a.evidence_stage === 'BEFORE' && isImg(a.mime_type));
+              const hasDuring = attachments.some(a => a.evidence_stage === 'DURING' && isImg(a.mime_type));
+              const hasAfter = attachments.some(a => a.evidence_stage === 'AFTER' && isImg(a.mime_type));
+
+              return (
+                <div style={{ background: '#f8fafc', padding: '0.75rem 1rem', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '1.25rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <strong style={{ fontSize: '0.85rem', color: '#1e293b' }}>
+                      Mandatory Photo Evidence Checklist ({complaint.priority} Priority):
+                    </strong>
+                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Verified image files required for FCR resolution</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.8rem', color: hasBefore ? '#16a34a' : '#ea580c', fontWeight: '700' }}>
+                      {hasBefore ? '✓ BEFORE Photo' : '○ BEFORE Photo Missing'}
+                    </span>
+                    <span style={{ fontSize: '0.8rem', color: hasDuring ? '#16a34a' : '#ea580c', fontWeight: '700' }}>
+                      {hasDuring ? '✓ DURING Photo' : '○ DURING Photo Missing'}
+                    </span>
+                    <span style={{ fontSize: '0.8rem', color: hasAfter ? '#16a34a' : '#ea580c', fontWeight: '700' }}>
+                      {hasAfter ? '✓ AFTER Photo' : '○ AFTER Photo Missing'}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
 
             {attachments.length === 0 ? (
               <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>No attachments uploaded yet.</p>
@@ -1066,7 +1385,23 @@ const ComplaintDetail = () => {
                 {attachments.map(att => (
                   <li key={att.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', padding: '0.75rem 1rem', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '0.9rem' }}>
                     <div style={{ wordBreak: 'break-all', paddingRight: '1rem' }}>
-                      <strong style={{ color: 'var(--secondary-color)' }}>{att.file_name}</strong>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <strong style={{ color: 'var(--secondary-color)' }}>{att.file_name}</strong>
+                        {att.evidence_stage && att.evidence_stage !== 'GENERAL' && (
+                          <span
+                            className="badge badge-info"
+                            style={{
+                              fontSize: '0.7rem',
+                              padding: '0.15rem 0.45rem',
+                              background: '#0284c7',
+                              color: '#fff',
+                              borderRadius: '4px'
+                            }}
+                          >
+                            {att.evidence_stage} EVIDENCE
+                          </span>
+                        )}
+                      </div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
                         {(att.file_size / 1024).toFixed(1)} KB | Uploaded by {att.first_name} {att.last_name} ({att.role})
                       </div>
@@ -1079,7 +1414,7 @@ const ComplaintDetail = () => {
                       >
                         Download
                       </button>
-                      {(user.role === 'ADMIN' || (att.uploaded_by_id === user.id && complaint.status !== 'Closed')) && (
+                      {(user.role === 'ADMIN' || (att.uploaded_by_id === user.id && complaint.status !== 'Closed' && !(user.role === 'CUSTOMER' && att.evidence_stage && att.evidence_stage !== 'GENERAL'))) && (
                         <button
                           className="btn btn-danger"
                           style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', whiteSpace: 'nowrap', backgroundColor: '#ef4444', borderColor: '#ef4444', color: '#fff' }}
@@ -1096,21 +1431,36 @@ const ComplaintDetail = () => {
 
             {complaint.status !== 'Closed' && (
               <form onSubmit={handleUploadFile} style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
-                <div className="form-group" style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: user.role !== 'CUSTOMER' ? '1fr 180px auto' : '1fr auto', gap: '0.75rem', alignItems: 'center' }}>
                   <input
                     type="file"
                     id="file-upload-input"
                     className="form-input"
-                    style={{ padding: '0.4rem 0.8rem', flexGrow: '1' }}
+                    style={{ padding: '0.4rem 0.8rem' }}
                     onChange={(e) => setSelectedFile(e.target.files[0])}
                     required
                   />
+
+                  {user.role !== 'CUSTOMER' && (
+                    <select
+                      className="form-input"
+                      value={evidenceStage}
+                      onChange={(e) => setEvidenceStage(e.target.value)}
+                      style={{ fontSize: '0.82rem', padding: '0.4rem 0.5rem' }}
+                    >
+                      <option value="GENERAL">General File</option>
+                      <option value="BEFORE">Before Work Photo</option>
+                      <option value="DURING">During Work Photo</option>
+                      <option value="AFTER">After Work Photo</option>
+                    </select>
+                  )}
+
                   <button type="submit" className="btn btn-primary" disabled={uploading || !selectedFile} style={{ whiteSpace: 'nowrap' }}>
                     {uploading ? 'Uploading...' : 'Upload File'}
                   </button>
                 </div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-                  Supported formats: image, PDF, text, document (Max 5MB)
+                  Supported formats: image (JPEG, PNG, WebP), PDF, text, document (Max 5MB). High/Critical priority resolution requires Before, During, and After image photos.
                 </div>
               </form>
             )}
@@ -1181,7 +1531,7 @@ const ComplaintDetail = () => {
             <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.65rem', fontSize: '0.875rem' }}>
               <li>
                 <span style={{ color: 'var(--text-muted)' }}>Category:</span>{' '}
-                <strong>{complaint.category}</strong>
+                <strong>{complaint.category || <span style={{ color: 'var(--text-muted)', fontWeight: 'normal' }}>Uncategorized</span>}</strong>
               </li>
               <li>
                 <span style={{ color: 'var(--text-muted)' }}>Filed By:</span>{' '}
@@ -1233,6 +1583,136 @@ const ComplaintDetail = () => {
             </ul>
           </div>
 
+          {/* Customer / Service Location Card */}
+          {customerInfo && (
+            <div className="card" style={{ borderLeft: '4px solid var(--brand-cyan)' }}>
+              <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Customer / Service Location</span>
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', fontSize: '0.875rem' }}>
+                <div>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Customer</span>
+                  <strong style={{ fontSize: '0.95rem' }}>{customerInfo.name || 'Valued Customer'}</strong>
+                </div>
+                {customerInfo.phone && (
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Phone</span>
+                    <a href={`tel:${customerInfo.phone}`} style={{ color: 'var(--primary-color)', textDecoration: 'none', fontWeight: '600' }}>
+                      {customerInfo.phone}
+                    </a>
+                  </div>
+                )}
+                {customerInfo.email && (
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Email</span>
+                    <a href={`mailto:${customerInfo.email}`} style={{ color: 'var(--primary-color)', textDecoration: 'none' }}>
+                      {customerInfo.email}
+                    </a>
+                  </div>
+                )}
+                <div>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Service Location</span>
+                  <div style={{ background: '#f8fafc', padding: '0.5rem 0.65rem', borderRadius: '6px', border: '1px solid var(--border-color)', marginTop: '0.25rem', lineHeight: '1.4' }}>
+                    {customerInfo.location_name && (
+                      <div style={{ fontWeight: '600', color: 'var(--primary-color)', fontSize: '0.82rem', marginBottom: '0.2rem' }}>
+                        📍 {customerInfo.location_name}
+                      </div>
+                    )}
+                    <div>{customerInfo.address || 'Service address on record'}</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                      {[customerInfo.city, customerInfo.state].filter(Boolean).join(', ')}{customerInfo.pincode ? ` - ${customerInfo.pincode}` : ''}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action buttons */}
+                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
+                  {customerInfo.phone && (
+                    <a href={`tel:${customerInfo.phone}`} className="btn btn-sm btn-primary" style={{ textDecoration: 'none', fontSize: '0.75rem', padding: '0.35rem 0.65rem' }}>
+                      📞 Call Customer
+                    </a>
+                  )}
+                  {customerInfo.phone && (
+                    <button type="button" className="btn btn-sm btn-secondary" style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem' }} onClick={() => handleCopy(customerInfo.phone, 'cust_phone')}>
+                      {copyStatus === 'cust_phone' ? 'Copied Phone!' : '📋 Copy Phone'}
+                    </button>
+                  )}
+                  {customerInfo.address && (
+                    <button type="button" className="btn btn-sm btn-secondary" style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem' }} onClick={() => handleCopy(`${customerInfo.address || ''}, ${customerInfo.city || ''}, ${customerInfo.state || ''} ${customerInfo.pincode || ''}`.trim(), 'cust_addr')}>
+                      {copyStatus === 'cust_addr' ? 'Copied Address!' : '📍 Copy Address'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Assigned Engineer Card */}
+          <div className="card" style={{ borderLeft: '4px solid var(--primary-color)' }}>
+            <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem' }}>
+              Assigned Engineer
+            </h3>
+            {engineerInfo ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', fontSize: '0.875rem' }}>
+                <div>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Engineer Name</span>
+                  <strong style={{ fontSize: '0.95rem' }}>{engineerInfo.name}</strong>
+                </div>
+                {engineerInfo.phone && (
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Phone</span>
+                    <a href={`tel:${engineerInfo.phone}`} style={{ color: 'var(--primary-color)', textDecoration: 'none', fontWeight: '600' }}>
+                      {engineerInfo.phone}
+                    </a>
+                  </div>
+                )}
+                {engineerInfo.email && (
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Email</span>
+                    <a href={`mailto:${engineerInfo.email}`} style={{ color: 'var(--primary-color)', textDecoration: 'none' }}>
+                      {engineerInfo.email}
+                    </a>
+                  </div>
+                )}
+                {user.role === 'ADMIN' && engineerInfo.address && (
+                  <div>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Operations Base / Address</span>
+                    <div style={{ background: '#f8fafc', padding: '0.5rem 0.65rem', borderRadius: '6px', border: '1px solid var(--border-color)', marginTop: '0.25rem', lineHeight: '1.4' }}>
+                      <div>{engineerInfo.address}</div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                        {[engineerInfo.city, engineerInfo.state].filter(Boolean).join(', ')}{engineerInfo.pincode ? ` - ${engineerInfo.pincode}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Status</span>
+                  <span className="badge badge-info" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {engineerInfo.status || complaint.status}
+                  </span>
+                </div>
+
+                {/* Engineer action buttons */}
+                {engineerInfo.phone && (
+                  <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
+                    <a href={`tel:${engineerInfo.phone}`} className="btn btn-sm btn-primary" style={{ textDecoration: 'none', fontSize: '0.75rem', padding: '0.35rem 0.65rem' }}>
+                      📞 Call Engineer
+                    </a>
+                    <button type="button" className="btn btn-sm btn-secondary" style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem' }} onClick={() => handleCopy(engineerInfo.phone, 'eng_phone')}>
+                      {copyStatus === 'eng_phone' ? 'Copied Phone!' : '📋 Copy Phone'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', fontStyle: 'italic', padding: '0.25rem 0' }}>
+                {user.role === 'ADMIN'
+                  ? 'Not Assigned'
+                  : 'Not yet assigned — An engineer will be assigned shortly.'}
+              </div>
+            )}
+          </div>
+
           {/* Customer Satisfaction Feedback (CSAT) Widget */}
           {complaint.status === 'Closed' && (
             <div className="card" style={{ borderLeft: '4px solid var(--primary-color)' }}>
@@ -1245,7 +1725,7 @@ const ComplaintDetail = () => {
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                     <span style={{ fontSize: '1.25rem', color: '#f59e0b' }}>
-                      {'★'.repeat(feedback.rating)}{'☆'.repeat(5 - feedback.rating)}
+                      {(() => { const r = Math.max(0, Math.min(5, Math.floor(Number(feedback.rating) || 0))); return '★'.repeat(r) + '☆'.repeat(5 - r); })()}
                     </span>
                     <strong style={{ fontSize: '0.9rem' }}>({feedback.rating} / 5)</strong>
                   </div>
@@ -1309,26 +1789,207 @@ const ComplaintDetail = () => {
             </div>
           )}
 
-          {/* Claim Ticket Widget for Engineers when ticket is unassigned */}
-          {user && (user.role === 'ENGINEER' || user.role === 'AGENT' || user.role === 'DEPT_HEAD') && !complaint.assigned_to_id && (
-            <div className="card" style={{ background: '#f8fafc', border: '1px dashed var(--primary-color)' }}>
-              <h3 style={{ marginBottom: '0.5rem', fontSize: '0.95rem', color: 'var(--primary-color)' }}>Ticket is Unassigned</h3>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-                This complaint is unassigned. Claim it to take ownership and start resolving.
-              </p>
-              <button
-                type="button"
-                className="btn btn-primary btn-block"
-                onClick={handleClaimTicketDetails}
-                disabled={claimingTicket}
-              >
-                {claimingTicket ? 'Claiming...' : 'Claim Ticket'}
-              </button>
+          {/* Milestone 1: Engineer Workflow Action Widget */}
+          {user && (user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id && (
+            <div className="card" style={{ background: '#f8fafc', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+              <h3 style={{ marginBottom: '0.5rem', fontSize: '1rem', color: 'var(--primary-dark)' }}>
+                Field Engineer Actions
+              </h3>
+
+              {/* State 1: Assigned -> Accept Complaint */}
+              {complaint.status === 'Assigned' && (
+                <div>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                    This complaint has been assigned to you. Accept the assignment to acknowledge and proceed to customer site.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-block"
+                    onClick={handleAcceptComplaint}
+                    disabled={submittingWorkflowAction}
+                  >
+                    {submittingWorkflowAction ? 'Accepting...' : 'Accept Complaint'}
+                  </button>
+                </div>
+              )}
+
+              {/* State 2: Accepted -> Start Work or Put On Hold */}
+              {/* State 2: Accepted -> Field Travel Sequence & Start Work */}
+              {complaint.status === 'Accepted' && (
+                <div>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                    You have accepted this ticket. Complete the travel steps to record on-site attendance before starting diagnostic/repair work.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {!fcrDetails?.travel_start_time && (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-block"
+                        onClick={handleStartTravel}
+                        disabled={travelingAction || submittingWorkflowAction}
+                        style={{ background: '#2563eb', borderColor: '#2563eb' }}
+                      >
+                        {travelingAction ? 'Starting Travel...' : '🚗 Start Travel'}
+                      </button>
+                    )}
+
+                    {fcrDetails?.travel_start_time && !fcrDetails?.reached_site_time && (
+                      <>
+                        <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', padding: '0.5rem', borderRadius: '6px', fontSize: '0.8rem', color: '#1e40af' }}>
+                          🚗 Travel started: <strong>{new Date(fcrDetails.travel_start_time).toLocaleTimeString()}</strong>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-block"
+                          onClick={handleReachedSite}
+                          disabled={travelingAction || submittingWorkflowAction}
+                          style={{ background: '#059669', borderColor: '#059669' }}
+                        >
+                          {travelingAction ? 'Recording Arrival...' : '📍 Reached Site'}
+                        </button>
+                      </>
+                    )}
+
+                    {fcrDetails?.reached_site_time && (
+                      <>
+                        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '0.5rem', borderRadius: '6px', fontSize: '0.8rem', color: '#166534' }}>
+                          📍 Reached site: <strong>{new Date(fcrDetails.reached_site_time).toLocaleTimeString()}</strong>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-block"
+                          onClick={handleStartWork}
+                          disabled={submittingWorkflowAction}
+                        >
+                          {submittingWorkflowAction ? 'Starting Work...' : '⚙️ Start Work'}
+                        </button>
+                      </>
+                    )}
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.25rem' }}>
+                      <button
+                        type="button"
+                        className="btn btn-warning btn-block"
+                        onClick={() => setShowHoldModal(true)}
+                        disabled={submittingWorkflowAction}
+                        style={{ background: '#f59e0b', borderColor: '#f59e0b', color: '#fff', fontSize: '0.8rem', padding: '0.4rem 0.5rem' }}
+                      >
+                        Put On Hold
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-block"
+                        onClick={() => {
+                          setReassignReasonInput('');
+                          setShowReassignRequestModal(true);
+                        }}
+                        disabled={submittingWorkflowAction}
+                        style={{ fontSize: '0.8rem', padding: '0.4rem 0.5rem' }}
+                      >
+                        🔄 Reassign
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* State 3: In Progress -> Put On Hold / Reassign */}
+              {complaint.status === 'In Progress' && (
+                <div>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                    Work is actively in progress. Complete diagnosis & repair steps and submit the Field Call Report below.
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-warning btn-block"
+                      onClick={() => setShowHoldModal(true)}
+                      disabled={submittingWorkflowAction}
+                      style={{ background: '#f59e0b', borderColor: '#f59e0b', color: '#fff', fontSize: '0.8rem', padding: '0.4rem 0.5rem' }}
+                    >
+                      Put On Hold
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-block"
+                      onClick={() => {
+                        setReassignReasonInput('');
+                        setShowReassignRequestModal(true);
+                      }}
+                      disabled={submittingWorkflowAction}
+                      style={{ fontSize: '0.8rem', padding: '0.4rem 0.5rem' }}
+                    >
+                      🔄 Reassign
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* State 4: On Hold -> Resume Work */}
+              {complaint.status === 'On Hold' && (
+                <div>
+                  <div style={{ background: '#fffbeb', border: '1px solid #fde68a', padding: '0.65rem', borderRadius: '6px', marginBottom: '0.75rem', fontSize: '0.85rem', color: '#92400e' }}>
+                    <strong>Hold Reason:</strong> {complaint.hold_reason || 'Ticket is on hold pending resources/parts.'}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-block"
+                    onClick={handleResumeWork}
+                    disabled={submittingWorkflowAction}
+                  >
+                    {submittingWorkflowAction ? 'Resuming...' : 'Resume Work'}
+                  </button>
+                </div>
+              )}
+
+              {/* State 5: Resolved */}
+              {complaint.status === 'Resolved' && (
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0, fontStyle: 'italic' }}>
+                  Field work completed and FCR submitted. Awaiting customer review and sign-off.
+                </p>
+              )}
+
+              {/* State 6: Closed */}
+              {complaint.status === 'Closed' && (
+                <p style={{ fontSize: '0.85rem', color: '#16a34a', margin: 0, fontWeight: 'bold' }}>
+                  ✓ This ticket has been verified and closed.
+                </p>
+              )}
             </div>
           )}
 
-          {/* Status update widget */}
-          {allowedOptions.length > 0 && (
+          {/* Classification Category Widget (Engineer / Admin) */}
+          {user && (user.role === 'ADMIN' || user.role === 'ENGINEER' || user.role === 'AGENT') && (
+            <div className="card">
+              <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem' }}>
+                Complaint Category
+              </h3>
+              <form onSubmit={handleUpdateCategory}>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Select Category</label>
+                  <select
+                    className="form-input"
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                  >
+                    <option value="">Uncategorized</option>
+                    {categories.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <button type="submit" className="btn btn-secondary btn-block" disabled={updatingCategory}>
+                  {updatingCategory ? 'Saving Category...' : 'Save Category'}
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Status update widget (Admin / Permitted role) */}
+          {allowedOptions.length > 0 && user.role === 'ADMIN' && (
             <div className="card">
               <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem' }}>
                 Transition Status
@@ -1368,11 +2029,11 @@ const ComplaintDetail = () => {
           {user.role === 'ADMIN' && (
             <div className="card">
               <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem' }}>
-                Assign Engineer
+                {complaint.status === 'Admin Review' ? 'Reassign Field Engineer' : 'Assign Field Engineer'}
               </h3>
               <form onSubmit={handleAssignRouting}>
                 <div className="form-group">
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Select Engineer</label>
+                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Select Field Engineer</label>
                   <select
                     className="form-input"
                     value={selectedAgent}
@@ -1387,7 +2048,7 @@ const ComplaintDetail = () => {
                   </select>
                 </div>
 
-                <button type="submit" className="btn btn-secondary btn-block" disabled={updatingAssign}>
+                <button type="submit" className="btn btn-primary btn-block" disabled={updatingAssign}>
                   {updatingAssign ? 'Saving Assignment...' : 'Confirm Assignment'}
                 </button>
               </form>
@@ -1419,45 +2080,329 @@ const ComplaintDetail = () => {
         </div>
       </div>
 
-      {/* Customer Delete Confirmation Modal */}
-      {showDeleteModal && (
+      {/* Put On Hold Modal */}
+      {showHoldModal && (
         <div className="modal-overlay">
-          <div className="modal-card" style={{ maxWidth: '450px' }}>
+          <div className="modal-card" style={{ maxWidth: '480px' }}>
             <div className="modal-header">
-              <h2>Delete Complaint</h2>
+              <h2>Put Ticket On Hold</h2>
               <button
                 style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
-                onClick={() => setShowDeleteModal(false)}
+                onClick={() => { setShowHoldModal(false); setHoldReasonInput(''); }}
               >
                 &times;
               </button>
             </div>
-            <div style={{ padding: '1rem 0' }}>
-              <p style={{ color: 'var(--text-color)', marginBottom: '0.75rem' }}>
-                Are you sure you want to delete this complaint?
-              </p>
-              <p style={{ color: 'var(--danger-color, #ef4444)', fontSize: '0.85rem', fontWeight: 'bold' }}>
-                This action cannot be undone.
-              </p>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+            <form onSubmit={handlePutOnHold}>
+              <div style={{ padding: '1rem 0' }}>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+                  Please enter the specific reason why this ticket is being placed on hold (e.g., waiting for replacement spare parts, awaiting site access).
+                </p>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Mandatory Hold Reason *</label>
+                  <textarea
+                    className="form-input"
+                    rows="3"
+                    value={holdReasonInput}
+                    onChange={(e) => setHoldReasonInput(e.target.value)}
+                    placeholder="Enter detailed reason for hold..."
+                    required
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => { setShowHoldModal(false); setHoldReasonInput(''); }}
+                  disabled={submittingWorkflowAction}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-warning"
+                  disabled={submittingWorkflowAction || !holdReasonInput.trim()}
+                  style={{ background: '#f59e0b', borderColor: '#f59e0b', color: '#fff' }}
+                >
+                  {submittingWorkflowAction ? 'Saving...' : 'Confirm On Hold'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reopen Complaint Modal */}
+      {showReopenModal && (
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <h2>Reopen Complaint</h2>
               <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setShowDeleteModal(false)}
-                disabled={deletingComplaint}
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onClick={() => { setShowReopenModal(false); setReopenReasonInput(''); }}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                onClick={handleDeleteComplaint}
-                disabled={deletingComplaint}
-              >
-                {deletingComplaint ? 'Deleting...' : 'Delete Complaint'}
+                &times;
               </button>
             </div>
+            <form onSubmit={handleReopenComplaint}>
+              <div style={{ padding: '1rem 0' }}>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+                  Please specify why the service resolution was unsatisfactory or why the issue remains unresolved. This will route the ticket to Admin Review for reassignment.
+                </p>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Mandatory Rejection / Reopen Reason *</label>
+                  <textarea
+                    className="form-input"
+                    rows="3"
+                    value={reopenReasonInput}
+                    onChange={(e) => setReopenReasonInput(e.target.value)}
+                    placeholder="Describe why the issue is not resolved..."
+                    required
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => { setShowReopenModal(false); setReopenReasonInput(''); }}
+                  disabled={submittingWorkflowAction}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-danger"
+                  disabled={submittingWorkflowAction || !reopenReasonInput.trim()}
+                  style={{ backgroundColor: '#ef4444', borderColor: '#ef4444', color: '#fff' }}
+                >
+                  {submittingWorkflowAction ? 'Reopening...' : 'Reopen Complaint'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Complaint Confirmation Modal */}
+      {showCancelModal && (
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '450px' }}>
+            <div className="modal-header">
+              <h2>Cancel Complaint</h2>
+              <button
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onClick={() => { setShowCancelModal(false); setCancelReasonInput(''); }}
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleCancelComplaint}>
+              <div style={{ padding: '1rem 0' }}>
+                <p style={{ color: 'var(--text-color)', marginBottom: '0.75rem' }}>
+                  Are you sure you want to cancel this complaint?
+                </p>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.8rem' }}>Cancellation Reason (Optional)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={cancelReasonInput}
+                    onChange={(e) => setCancelReasonInput(e.target.value)}
+                    placeholder="Why are you cancelling this ticket?"
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => { setShowCancelModal(false); setCancelReasonInput(''); }}
+                  disabled={submittingWorkflowAction}
+                >
+                  Keep Ticket
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-danger"
+                  disabled={submittingWorkflowAction}
+                  style={{ backgroundColor: '#ef4444', borderColor: '#ef4444', color: '#fff' }}
+                >
+                  {submittingWorkflowAction ? 'Cancelling...' : 'Cancel Complaint'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Engineer Reassignment Request Modal */}
+      {showReassignRequestModal && (
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <h2>Request Ticket Reassignment</h2>
+              <button
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onClick={() => { setShowReassignRequestModal(false); setReassignReasonInput(''); }}
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleRequestReassignment}>
+              <div style={{ padding: '1rem 0' }}>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+                  Submit a formal request to transfer this ticket to another engineer. This request will be queued for administrator review.
+                </p>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Mandatory Reassignment Reason *</label>
+                  <textarea
+                    className="form-input"
+                    rows="3"
+                    value={reassignReasonInput}
+                    onChange={(e) => setReassignReasonInput(e.target.value)}
+                    placeholder="Describe why reassignment is required (e.g. specialized skill needed, location mismatch)..."
+                    required
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => { setShowReassignRequestModal(false); setReassignReasonInput(''); }}
+                  disabled={submittingReassignAction}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={submittingReassignAction || !reassignReasonInput.trim()}
+                >
+                  {submittingReassignAction ? 'Submitting...' : 'Submit Request'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Reassignment Approve Modal */}
+      {showReassignApproveModal && (
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <h2>Approve & Reassign Ticket</h2>
+              <button
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onClick={() => { setShowReassignApproveModal(false); setReassignDecisionReason(''); setReassignTargetEngineer(''); }}
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleApproveReassignment}>
+              <div style={{ padding: '1rem 0' }}>
+                <div className="form-group">
+                  <label className="form-label">Assign To Field Engineer *</label>
+                  <select
+                    className="form-input"
+                    value={reassignTargetEngineer}
+                    onChange={(e) => setReassignTargetEngineer(e.target.value)}
+                    required
+                  >
+                    <option value="">-- Select New Engineer --</option>
+                    {agents.map(a => (
+                      <option key={a.id} value={a.id}>
+                        {a.first_name} {a.last_name} ({a.email})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Approval Remarks (Optional)</label>
+                  <textarea
+                    className="form-input"
+                    rows="2"
+                    value={reassignDecisionReason}
+                    onChange={(e) => setReassignDecisionReason(e.target.value)}
+                    placeholder="Approval comments or handoff instructions..."
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => { setShowReassignApproveModal(false); setReassignDecisionReason(''); setReassignTargetEngineer(''); }}
+                  disabled={submittingReassignAction}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={submittingReassignAction || !reassignTargetEngineer}
+                >
+                  {submittingReassignAction ? 'Approving...' : 'Approve & Reassign'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Reassignment Reject Modal */}
+      {showReassignRejectModal && (
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <h2>Reject Reassignment Request</h2>
+              <button
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onClick={() => { setShowReassignRejectModal(false); setReassignRejectReason(''); }}
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleRejectReassignment}>
+              <div style={{ padding: '1rem 0' }}>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
+                  Provide a mandatory decision explanation explaining why the engineer must retain this service assignment.
+                </p>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">Mandatory Rejection Decision Reason *</label>
+                  <textarea
+                    className="form-input"
+                    rows="3"
+                    value={reassignRejectReason}
+                    onChange={(e) => setReassignRejectReason(e.target.value)}
+                    placeholder="Reason for rejecting reassignment..."
+                    required
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => { setShowReassignRejectModal(false); setReassignRejectReason(''); }}
+                  disabled={submittingReassignAction}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-danger"
+                  disabled={submittingReassignAction || !reassignRejectReason.trim()}
+                  style={{ backgroundColor: '#ef4444', borderColor: '#ef4444', color: '#fff' }}
+                >
+                  {submittingReassignAction ? 'Rejecting...' : 'Reject Request'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

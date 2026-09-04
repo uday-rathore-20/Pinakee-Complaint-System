@@ -66,7 +66,8 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
-  // Wrapped fetch helper that automatically adds Authorization headers and handles 401s
+  // Wrapped fetch helper that automatically adds Authorization headers, extracts X-Request-Id,
+  // normalizes error responses safely, and handles 401s
   const authFetch = async (endpoint, options = {}) => {
     const token = localStorage.getItem('pinakee_token');
     
@@ -89,17 +90,59 @@ export const AuthProvider = ({ children }) => {
         headers
       });
 
+      // Extract backend request correlation identifier from response headers
+      const requestId = res.headers ? (res.headers.get('x-request-id') || res.headers.get('x-correlation-id') || null) : null;
+      res.requestId = requestId;
+
+      // Decorate res.json to gracefully handle non-JSON / HTML / empty error bodies
+      // and safely propagate the response requestId without mutating native response semantics
+      const originalJson = res.json.bind(res);
+      res.json = async () => {
+        try {
+          const data = await originalJson();
+          if (data && typeof data === 'object' && requestId && !data.requestId) {
+            data.requestId = requestId;
+          }
+          return data;
+        } catch (parseErr) {
+          // Graceful fallback for empty responses or HTML error pages (e.g. 502/504 proxy errors)
+          const fallbackMsg = res.statusText && res.statusText.trim() ? res.statusText : `HTTP ${res.status} Error`;
+          return {
+            success: false,
+            message: fallbackMsg,
+            status: res.status,
+            requestId: requestId || null
+          };
+        }
+      };
+
+      // Handle 401 Unauthorized / Expired JWT: clear session and throw enriched error
       if (res.status === 401) {
         logout();
-        throw new Error('Session expired. Please log in again.');
+        const authErr = new Error('Session expired. Please log in again.');
+        authErr.status = 401;
+        authErr.requestId = requestId || null;
+        throw authErr;
       }
 
       return res;
     } catch (err) {
-      console.error(`API Fetch Error [${endpoint}]:`, err.message);
+      if (err && err.status === 401) {
+        throw err;
+      }
+
+      const isAbort = err.name === 'AbortError' || err.code === 20;
+      const errorMsg = isAbort ? 'Request was cancelled.' : (err.message || 'Network connection failed.');
+      console.error(`API Fetch Error [${endpoint}]:`, errorMsg);
+
+      if (!isAbort) {
+        err.status = err.status || 0;
+        err.requestId = null; // Strictly zero fabrication on network failures
+      }
       throw err;
     }
   };
+
 
   return (
     <AuthContext.Provider value={{ user, setUser, loading, login, logout, authFetch, API_BASE }}>

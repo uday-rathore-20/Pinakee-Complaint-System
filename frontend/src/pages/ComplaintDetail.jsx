@@ -284,12 +284,8 @@ const ComplaintDetail = () => {
     try {
       setSubmittingReassignAction(true);
       setActionError('');
-      const res = await fetch(`http://localhost:5000/api/complaints/${id}/reassignment/reject`, {
+      const res = await authFetch(`/complaints/${id}/reassignment/reject`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
         body: JSON.stringify({
           decision_reason: reassignRejectReason.trim()
         })
@@ -1303,7 +1299,7 @@ const ComplaintDetail = () => {
       {actionError && <div className="alert alert-danger">{actionError}</div>}
 
       <div className="section-grid">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
           {/* Main Details card */}
           <div className="card">
             <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '1rem' }}>
@@ -1522,7 +1518,7 @@ const ComplaintDetail = () => {
         </div>
 
         {/* Side Panel: Metadata and Status Updates */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
           {/* Metadata Card */}
           <div className="card">
             <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.75rem', fontSize: '1rem' }}>

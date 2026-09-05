@@ -7,7 +7,7 @@ export default function DigitalFcrReport({
   onRefresh,
   onDownloadPdf
 }) {
-  const { user, token } = useAuth();
+  const { user, token, authFetch } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -63,9 +63,7 @@ export default function DigitalFcrReport({
     try {
       setLoading(true);
       setError('');
-      const res = await fetch(`http://localhost:5000/api/complaints/${complaintId}/fcr`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await authFetch(`/complaints/${complaintId}/fcr`);
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.message || 'Failed to fetch Service Report');
@@ -175,12 +173,8 @@ export default function DigitalFcrReport({
         parts
       };
 
-      const res = await fetch(`http://localhost:5000/api/complaints/${complaintId}/fcr`, {
+      const res = await authFetch(`/complaints/${complaintId}/fcr`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
         body: JSON.stringify(payload)
       });
 
@@ -231,12 +225,8 @@ export default function DigitalFcrReport({
       setSuccessMsg('');
 
       // First ensure draft updates are persisted
-      await fetch(`http://localhost:5000/api/complaints/${complaintId}/fcr`, {
+      await authFetch(`/complaints/${complaintId}/fcr`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
         body: JSON.stringify({
           call_type: callType,
           problem_reported: problemReported,
@@ -263,12 +253,8 @@ export default function DigitalFcrReport({
       });
 
       // Submit FCR and resolve ticket
-      const res = await fetch(`http://localhost:5000/api/complaints/${complaintId}/fcr/submit`, {
+      const res = await authFetch(`/complaints/${complaintId}/fcr/submit`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
         body: JSON.stringify({
           diagnosed_problem: diagnosedProblem,
           action_taken: actionTaken,
@@ -299,12 +285,8 @@ export default function DigitalFcrReport({
     try {
       setSubmitting(true);
       setError('');
-      const res = await fetch(`http://localhost:5000/api/complaints/${complaintId}/fcr/confirm`, {
+      const res = await authFetch(`/complaints/${complaintId}/fcr/confirm`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
         body: JSON.stringify({
           customer_rating: customerRating,
           customer_feedback: customerFeedback

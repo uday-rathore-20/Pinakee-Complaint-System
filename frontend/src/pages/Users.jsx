@@ -176,69 +176,116 @@ const Users = () => {
     }
   };
 
-  if (loading) {
-    return <div className="page-container"><h2>Loading User Accounts...</h2></div>;
-  }
+  const getInitials = (first = '', last = '') => {
+    return `${first.charAt(0)}${last.charAt(0)}`.toUpperCase() || 'U';
+  };
 
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-        <h1>User Administration Panel</h1>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+      {/* Page Header */}
+      <div className="page-header">
+        <div className="page-title-group">
+          <h1>User Administration</h1>
+          <p>Manage system users, access roles (Admin, Engineer, Customer), and account activation</p>
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <button className="btn btn-secondary" onClick={handleExportUsersCSV}>
+            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
             Export Users CSV
-          </button>
-          <button className="btn btn-primary" onClick={handleOpenCreateModal}>
-            Create User Account
           </button>
         </div>
       </div>
 
-      {error && <div className="alert alert-danger">{error}</div>}
+      {error && (
+        <div className="alert alert-danger">
+          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          <div>{error}</div>
+        </div>
+      )}
 
-      {/* Users table */}
-      <div className="card" style={{ padding: '0' }}>
-        <div className="table-container">
+      {/* Users Table */}
+      <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
+        <div className="table-container" style={{ border: 'none', borderRadius: '0' }}>
           <table className="data-table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Action</th>
+                <th>User</th>
+                <th>Email Address</th>
+                <th>Access Role</th>
+                <th>Account Status</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {users.map(u => (
                 <tr key={u.id}>
-                  <td>{u.id}</td>
-                  <td><strong>{u.first_name} {u.last_name}</strong></td>
-                  <td>{u.email}</td>
                   <td>
-                    <span className="badge badge-assigned" style={{ fontSize: '0.7rem' }}>{u.role}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <div
+                        style={{
+                          width: '34px',
+                          height: '34px',
+                          borderRadius: '50%',
+                          background: 'var(--brand-navy-light)',
+                          color: '#fff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: '700',
+                          fontSize: '0.78rem',
+                          flexShrink: 0
+                        }}
+                      >
+                        {getInitials(u.first_name, u.last_name)}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: '600', color: 'var(--text-main)' }}>
+                          {u.first_name} {u.last_name}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-light)', fontFamily: 'JetBrains Mono, monospace' }}>
+                          ID #{u.id}
+                        </div>
+                      </div>
+                    </div>
                   </td>
                   <td>
-                    <span className={`badge ${u.is_active ? 'badge-resolved' : 'badge-closed'}`}>
-                      {u.is_active ? 'Active' : 'Deactivated'}
+                    <span style={{ fontSize: '0.88rem', color: 'var(--text-color)' }}>{u.email}</span>
+                  </td>
+                  <td>
+                    <span className="badge badge-assigned" style={{ fontSize: '0.72rem' }}>
+                      {u.role}
                     </span>
                   </td>
                   <td>
-                    <button
-                      className="btn btn-secondary"
-                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', marginRight: '0.5rem' }}
-                      onClick={() => handleOpenEditModal(u)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      className={`btn ${u.is_active ? 'btn-danger' : 'btn-secondary'}`}
-                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
-                      onClick={() => handleToggleStatus(u)}
-                    >
-                      {u.is_active ? 'Deactivate' : 'Activate'}
-                    </button>
+                    <span className={`badge ${u.is_active ? 'badge-resolved' : 'badge-closed'}`}>
+                      {u.is_active ? '● Active' : '○ Deactivated'}
+                    </span>
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => handleOpenEditModal(u)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className={`btn btn-sm ${u.is_active ? 'btn-outline' : 'btn-primary'}`}
+                        style={{
+                          borderColor: u.is_active ? 'var(--danger-border)' : 'transparent',
+                          color: u.is_active ? 'var(--danger-text)' : '#fff',
+                          backgroundColor: u.is_active ? 'var(--danger-bg)' : 'var(--primary-color)'
+                        }}
+                        onClick={() => handleToggleStatus(u)}
+                      >
+                        {u.is_active ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -252,16 +299,20 @@ const Users = () => {
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header">
-              <h2>{editingUser ? 'Edit User Account' : 'Create a New User Account'}</h2>
+              <h2>{editingUser ? 'Edit User Account' : 'Create User Account'}</h2>
               <button
-                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--text-muted)' }}
                 onClick={() => setShowModal(false)}
               >
                 &times;
               </button>
             </div>
 
-            {formError && <div className="alert alert-danger">{formError}</div>}
+            {formError && (
+              <div className="alert alert-danger" style={{ marginBottom: '1.25rem' }}>
+                <div>{formError}</div>
+              </div>
+            )}
 
             <form onSubmit={handleSubmitUser}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
@@ -272,6 +323,7 @@ const Users = () => {
                     className="form-input"
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
+                    placeholder="e.g. Rahul"
                     required
                   />
                 </div>
@@ -283,6 +335,7 @@ const Users = () => {
                     className="form-input"
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
+                    placeholder="e.g. Sharma"
                     required
                   />
                 </div>
@@ -295,20 +348,21 @@ const Users = () => {
                   className="form-input"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  placeholder="e.g. user@pinakee.com"
                   required
                 />
               </div>
 
               <div className="form-group">
                 <label className="form-label">
-                  {editingUser ? 'New Password (Optional)' : 'Temporary Password'}
+                  {editingUser ? 'New Password (Leave blank to keep unchanged)' : 'Temporary Password'}
                 </label>
                 <input
                   type="password"
                   className="form-input"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={editingUser ? "Leave blank to keep current" : "Minimum 6 characters"}
+                  placeholder={editingUser ? "••••••••" : "Minimum 6 characters"}
                   required={!editingUser}
                 />
               </div>
@@ -316,7 +370,7 @@ const Users = () => {
               <div className="form-group" style={{ marginBottom: '1.5rem' }}>
                 <label className="form-label">Role</label>
                 <select
-                  className="form-input"
+                  className="form-select"
                   value={roleId}
                   onChange={(e) => setRoleId(e.target.value)}
                   required

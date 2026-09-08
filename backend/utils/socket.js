@@ -60,13 +60,39 @@ const authenticateSocket = async (socket, next) => {
 const verifyComplaintAccess = (user, complaint) => {
   if (user.role === 'ADMIN') return true;
   if (user.role === 'ENGINEER' || user.role === 'AGENT') {
-    if (complaint.assigned_to_id === user.id) return true;
-    if (complaint.assigned_to_id === null) {
-      if (!complaint.department_id || !user.department_id || complaint.department_id === user.department_id) return true;
-    }
+    return complaint.assigned_to_id === user.id;
   }
   if (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id) return true;
   if (user.role === 'CUSTOMER' && complaint.created_by_id === user.id) return true;
+  return false;
+};
+
+const defaultAllowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+  'http://localhost:3000',
+  'http://localhost:5000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+  'http://127.0.0.1:5175',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5000'
+];
+
+const envAllowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean)
+  : [];
+
+const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...envAllowedOrigins]));
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  const isDevelopment = !process.env.NODE_ENV || process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
+  if (isDevelopment && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    return true;
+  }
   return false;
 };
 
@@ -76,7 +102,13 @@ const verifyComplaintAccess = (user, complaint) => {
 const initSocket = (httpServer) => {
   io = new Server(httpServer, {
     cors: {
-      origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : '*',
+      origin: (origin, callback) => {
+        if (isOriginAllowed(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
       credentials: true
     }

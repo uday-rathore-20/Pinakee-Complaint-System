@@ -5,6 +5,7 @@ const {
   getDepartments,
   getStatuses,
   getPriorities,
+  getMyServiceLocations
 } = require('../controllers/lookups.controller');
 const { authenticateJWT } = require('../middleware/auth');
 
@@ -13,5 +14,6 @@ router.get('/categories', authenticateJWT, getCategories);
 router.get('/departments', authenticateJWT, getDepartments);
 router.get('/statuses', authenticateJWT, getStatuses);
 router.get('/priorities', authenticateJWT, getPriorities);
+router.get('/my-service-locations', authenticateJWT, getMyServiceLocations);
 
 module.exports = router;

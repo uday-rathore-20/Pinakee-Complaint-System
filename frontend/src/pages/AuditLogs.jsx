@@ -127,25 +127,32 @@ const AuditLogs = () => {
 
   return (
     <div className="page-container">
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-        <div>
-          <h1 className="page-title">Administrative Audit Trails</h1>
-          <p className="page-subtitle" style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-            Ledger of system-wide security, account modifications, and administrative operations.
+      {/* Page Header */}
+      <div className="page-header">
+        <div className="page-title-group">
+          <h1>Administrative Audit Trails</h1>
+          <p>
+            Immutable ledger of system-wide authentication events, security modifications, and administrative operations.
           </p>
         </div>
       </div>
 
-      {error && <div className="alert alert-danger" style={{ marginBottom: '1.5rem' }}>{error}</div>}
+      {error && (
+        <div className="alert alert-danger">
+          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          <div>{error}</div>
+        </div>
+      )}
 
       {/* Filter Bar Panel */}
-      <div className="card" style={{ padding: '1.25rem', marginBottom: '1.5rem', background: 'var(--card-bg)', borderRadius: '8px' }}>
+      <div className="card" style={{ padding: '1.25rem', marginBottom: '1.5rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', alignItems: 'end' }}>
-
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Filter Performer</label>
+            <label className="form-label">Performer</label>
             <select
-              className="form-input"
+              className="form-select"
               value={selectedUser}
               onChange={(e) => { setSelectedUser(e.target.value); setPage(1); }}
             >
@@ -157,9 +164,9 @@ const AuditLogs = () => {
           </div>
 
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Filter Action</label>
+            <label className="form-label">Action Event</label>
             <select
-              className="form-input"
+              className="form-select"
               value={selectedAction}
               onChange={(e) => { setSelectedAction(e.target.value); setPage(1); }}
             >
@@ -189,16 +196,15 @@ const AuditLogs = () => {
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div>
             <button
               onClick={handleResetFilters}
-              className="btn btn-outline"
+              className="btn btn-secondary"
               style={{ width: '100%', whiteSpace: 'nowrap' }}
             >
-              Clear Filters
+              Reset Filters
             </button>
           </div>
-
         </div>
       </div>
 
@@ -206,102 +212,100 @@ const AuditLogs = () => {
       <div className="card" style={{ overflow: 'hidden', padding: 0 }}>
         {loading ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-            <h3>Loading audit trails...</h3>
+            <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⏳</div>
+            <p style={{ fontWeight: '600' }}>Loading audit logs...</p>
           </div>
         ) : logs.length === 0 ? (
-          <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-            <h3>No audit records match selected filters.</h3>
+          <div style={{ padding: '3rem 2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🔍</div>
+            <p style={{ fontWeight: '600', color: 'var(--text-main)' }}>No audit records match the selected filters.</p>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <div className="table-container" style={{ border: 'none', borderRadius: 0 }}>
+            <table className="data-table">
               <thead>
-                <tr style={{ background: 'var(--bg-light)', borderBottom: '1px solid var(--border-color)' }}>
-                  <th style={{ padding: '0.75rem 1rem', textAlign: 'left' }}>Timestamp (IST)</th>
-                  <th style={{ padding: '0.75rem 1rem', textAlign: 'left' }}>Actor</th>
-                  <th style={{ padding: '0.75rem 1rem', textAlign: 'left' }}>Action</th>
-                  <th style={{ padding: '0.75rem 1rem', textAlign: 'left' }}>Description</th>
-                  <th style={{ padding: '0.75rem 1rem', textAlign: 'left' }}>IP Address</th>
-                  <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>Details</th>
+                <tr>
+                  <th>Timestamp (IST)</th>
+                  <th>Actor / User</th>
+                  <th>Action Event</th>
+                  <th>Description</th>
+                  <th>IP Address</th>
+                  <th style={{ textAlign: 'center' }}>Metadata</th>
                 </tr>
               </thead>
               <tbody>
                 {logs.map((log) => {
                   const isExpanded = expandedLogId === log.id;
                   const hasMetadata = log.metadata_json && Object.keys(log.metadata_json).length > 0;
+                  const isFailure = log.action_type.includes('FAILED') || log.action_type.includes('BLOCKED');
 
                   return (
                     <React.Fragment key={log.id}>
-                      <tr style={{ borderBottom: '1px solid var(--border-color)', transition: 'background 0.2s' }}>
-                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                      <tr>
+                        <td style={{ fontSize: '0.82rem', whiteSpace: 'nowrap', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>
                           {formatDate(log.created_at)}
                         </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
+                        <td>
                           {log.user_email ? (
                             <div>
-                              <div style={{ fontWeight: 500, fontSize: '0.875rem' }}>{log.user_email}</div>
-                              <span
-                                style={{
-                                  fontSize: '0.7rem',
-                                  padding: '0.1rem 0.3rem',
-                                  borderRadius: '4px',
-                                  background: log.user_role === 'ADMIN' ? '#fee2e2' : '#f1f5f9',
-                                  color: log.user_role === 'ADMIN' ? '#991b1b' : '#475569'
-                                }}
-                              >
+                              <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-main)' }}>{log.user_email}</div>
+                              <span className="badge badge-low" style={{ fontSize: '0.65rem' }}>
                                 {log.user_role}
                               </span>
                             </div>
                           ) : (
-                            <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>System / Anonymous</span>
+                            <span style={{ color: 'var(--text-light)', fontSize: '0.82rem' }}>System / Anonymous</span>
                           )}
                         </td>
-                        <td style={{ padding: '0.75rem 1rem' }}>
+                        <td>
                           <span
                             style={{
-                              fontFamily: 'monospace',
-                              fontSize: '0.8rem',
-                              fontWeight: 'bold',
-                              padding: '0.2rem 0.4rem',
+                              fontFamily: 'JetBrains Mono, monospace',
+                              fontSize: '0.75rem',
+                              fontWeight: '700',
+                              padding: '0.2rem 0.45rem',
                               borderRadius: '4px',
-                              background: log.action_type.includes('FAILED') || log.action_type.includes('BLOCKED') ? '#fee2e2' : '#dcfce7',
-                              color: log.action_type.includes('FAILED') || log.action_type.includes('BLOCKED') ? '#991b1b' : '#166534'
+                              background: isFailure ? 'var(--danger-bg)' : 'var(--success-bg)',
+                              color: isFailure ? 'var(--danger-text)' : 'var(--success-text)',
+                              border: isFailure ? '1px solid var(--danger-border)' : '1px solid var(--success-border)',
+                              display: 'inline-block'
                             }}
                           >
                             {log.action_type}
                           </span>
                         </td>
-                        <td style={{ padding: '0.75rem 1rem', fontSize: '0.875rem' }}>
+                        <td style={{ fontSize: '0.85rem', color: 'var(--text-color)' }}>
                           {log.description}
                         </td>
-                        <td style={{ padding: '0.75rem 1rem', fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                           {log.ip_address || '—'}
                         </td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
+                        <td style={{ textAlign: 'center' }}>
                           <button
                             disabled={!hasMetadata}
                             onClick={() => handleToggleExpand(log.id)}
-                            className="btn btn-outline"
+                            className="btn btn-sm btn-secondary"
                             style={{
                               padding: '0.25rem 0.5rem',
                               fontSize: '0.75rem',
-                              borderColor: hasMetadata ? 'var(--primary-light)' : '#cbd5e1',
-                              color: hasMetadata ? 'var(--primary-light)' : '#94a3b8',
-                              cursor: hasMetadata ? 'pointer' : 'not-allowed'
+                              cursor: hasMetadata ? 'pointer' : 'not-allowed',
+                              opacity: hasMetadata ? 1 : 0.4
                             }}
                           >
-                            {isExpanded ? 'Hide' : 'View'}
+                            {isExpanded ? 'Hide' : 'View JSON'}
                           </button>
                         </td>
                       </tr>
                       {isExpanded && hasMetadata && (
-                        <tr style={{ background: '#f8fafc' }}>
+                        <tr style={{ background: 'var(--bg-subtle)' }}>
                           <td colSpan="6" style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
-                            <div style={{ padding: '0.75rem', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
-                              <h5 style={{ margin: '0 0 0.5rem 0', color: '#64748b', fontSize: '0.75rem', textTransform: 'uppercase' }}>
-                                Metadata Details JSON
-                              </h5>
-                              <pre style={{ margin: 0, fontSize: '0.8rem', color: '#334155', whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                            <div style={{ padding: '0.85rem', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                  Audit Metadata Payload
+                                </span>
+                              </div>
+                              <pre style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-main)', whiteSpace: 'pre-wrap', fontFamily: 'JetBrains Mono, monospace', background: 'var(--bg-subtle)', padding: '0.75rem', borderRadius: '4px' }}>
                                 {JSON.stringify(log.metadata_json, null, 2)}
                               </pre>
                             </div>
@@ -316,31 +320,29 @@ const AuditLogs = () => {
           </div>
         )}
 
-        {/* Table Pagination footer */}
+        {/* Table Pagination Footer */}
         {!loading && totalCount > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderTop: '1px solid var(--border-color)', background: 'var(--bg-light)' }}>
-            <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-              Showing {((page - 1) * limit) + 1} to {Math.min(page * limit, totalCount)} of {totalCount} entries
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.85rem 1.25rem', borderTop: '1px solid var(--border-color)', background: 'var(--bg-subtle)' }}>
+            <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)', fontWeight: '500' }}>
+              Showing {((page - 1) * limit) + 1} &ndash; {Math.min(page * limit, totalCount)} of {totalCount} log entries
             </span>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <button
-                className="btn btn-outline"
+                className="btn btn-sm btn-secondary"
                 disabled={page === 1}
                 onClick={() => setPage(prev => Math.max(1, prev - 1))}
-                style={{ padding: '0.4rem 0.8rem', fontSize: '0.875rem' }}
               >
-                Previous
+                &larr; Previous
               </button>
-              <span style={{ display: 'flex', alignItems: 'center', padding: '0 0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>
+              <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', padding: '0 0.25rem' }}>
                 Page {page} of {totalPages}
               </span>
               <button
-                className="btn btn-outline"
+                className="btn btn-sm btn-secondary"
                 disabled={page === totalPages}
                 onClick={() => setPage(prev => Math.min(totalPages, prev + 1))}
-                style={{ padding: '0.4rem 0.8rem', fontSize: '0.875rem' }}
               >
-                Next
+                Next &rarr;
               </button>
             </div>
           </div>

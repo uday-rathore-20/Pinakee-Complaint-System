@@ -261,8 +261,298 @@ const checkSlaBreaches = async () => {
     } catch (err) {
       console.error('SLA Daemon check escalations error:', err.message);
     }
+
+    // Step 3: Process 24-hour & 48-hour resolution confirmation reminders
+    await processResolutionReminders();
+
+    // Step 4: Process 72-hour system auto-closures
+    await processAutoClosures();
+
+  } catch (err) {
+    console.error('SLA Daemon overall check error:', err.message);
   } finally {
     await lockManager.unlock(lockHandle);
+  }
+};
+
+/**
+ * Processes 24-hour and 48-hour customer confirmation reminders for Resolved tickets.
+ */
+const processResolutionReminders = async () => {
+  if (!dbPool) return;
+
+  // 1. Process 24-Hour Reminders
+  try {
+    const query24 = `
+      SELECT c.id, c.ticket_number, c.title, c.created_by_id, f.work_close_time,
+             u.id AS user_id, u.first_name, u.last_name, u.email
+      FROM complaints c
+      JOIN complaint_statuses cs ON c.status_id = cs.id
+      JOIN field_call_reports f ON f.complaint_id = c.id
+      JOIN users u ON c.created_by_id = u.id
+      WHERE cs.name = 'Resolved'
+        AND f.status = 'Submitted'
+        AND f.customer_confirmed_at IS NULL
+        AND f.auto_closed_at IS NULL
+        AND f.reminder_24h_sent_at IS NULL
+        AND f.work_close_time <= NOW() - INTERVAL '24 hours'
+    `;
+    const res24 = await dbPool.query(query24);
+
+    for (const row of res24.rows) {
+      const client = await dbPool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Atomic conditional claim
+        const claimRes = await client.query(`
+          UPDATE field_call_reports
+          SET reminder_24h_sent_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE complaint_id = $1
+            AND reminder_24h_sent_at IS NULL
+            AND status = 'Submitted'
+            AND customer_confirmed_at IS NULL
+            AND auto_closed_at IS NULL
+            AND work_close_time <= NOW() - INTERVAL '24 hours'
+          RETURNING id
+        `, [row.id]);
+
+        if (claimRes.rows.length === 0) {
+          await client.query('ROLLBACK');
+          client.release();
+          continue;
+        }
+
+        const creator = {
+          id: row.user_id,
+          first_name: row.first_name,
+          last_name: row.last_name,
+          email: row.email
+        };
+
+        // Transactionally persist in-app notification & email_outbox
+        await notifications.sendResolutionReminder24h(row, creator, client);
+
+        await client.query('COMMIT');
+        client.release();
+
+        logger.audit('SLA_REMINDER_24H_SENT', {
+          complaintId: row.id,
+          ticketNumber: row.ticket_number,
+          resolvedAt: row.work_close_time
+        });
+
+      } catch (txErr) {
+        await client.query('ROLLBACK');
+        client.release();
+        console.error(`SLA Daemon: Failed to process 24h reminder for ticket #${row.ticket_number}:`, txErr.message);
+      }
+    }
+  } catch (err) {
+    console.error('SLA Daemon 24h reminders query error:', err.message);
+  }
+
+  // 2. Process 48-Hour Reminders
+  try {
+    const query48 = `
+      SELECT c.id, c.ticket_number, c.title, c.created_by_id, f.work_close_time,
+             u.id AS user_id, u.first_name, u.last_name, u.email
+      FROM complaints c
+      JOIN complaint_statuses cs ON c.status_id = cs.id
+      JOIN field_call_reports f ON f.complaint_id = c.id
+      JOIN users u ON c.created_by_id = u.id
+      WHERE cs.name = 'Resolved'
+        AND f.status = 'Submitted'
+        AND f.customer_confirmed_at IS NULL
+        AND f.auto_closed_at IS NULL
+        AND f.reminder_48h_sent_at IS NULL
+        AND f.work_close_time <= NOW() - INTERVAL '48 hours'
+    `;
+    const res48 = await dbPool.query(query48);
+
+    for (const row of res48.rows) {
+      const client = await dbPool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Atomic conditional claim
+        const claimRes = await client.query(`
+          UPDATE field_call_reports
+          SET reminder_48h_sent_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE complaint_id = $1
+            AND reminder_48h_sent_at IS NULL
+            AND status = 'Submitted'
+            AND customer_confirmed_at IS NULL
+            AND auto_closed_at IS NULL
+            AND work_close_time <= NOW() - INTERVAL '48 hours'
+          RETURNING id
+        `, [row.id]);
+
+        if (claimRes.rows.length === 0) {
+          await client.query('ROLLBACK');
+          client.release();
+          continue;
+        }
+
+        const creator = {
+          id: row.user_id,
+          first_name: row.first_name,
+          last_name: row.last_name,
+          email: row.email
+        };
+
+        await notifications.sendResolutionReminder48h(row, creator, client);
+
+        await client.query('COMMIT');
+        client.release();
+
+        logger.audit('SLA_REMINDER_48H_SENT', {
+          complaintId: row.id,
+          ticketNumber: row.ticket_number,
+          resolvedAt: row.work_close_time
+        });
+
+      } catch (txErr) {
+        await client.query('ROLLBACK');
+        client.release();
+        console.error(`SLA Daemon: Failed to process 48h reminder for ticket #${row.ticket_number}:`, txErr.message);
+      }
+    }
+  } catch (err) {
+    console.error('SLA Daemon 48h reminders query error:', err.message);
+  }
+};
+
+/**
+ * Processes 72-hour system auto-closure for tickets remaining in Resolved without customer response.
+ * CRITICAL: Zero fabrication of customer feedback/rating/signature.
+ */
+const processAutoClosures = async () => {
+  if (!dbPool) return;
+
+  try {
+    const query72 = `
+      SELECT c.id, c.ticket_number, c.title, c.created_by_id, c.status_id, f.work_close_time,
+             u.id AS user_id, u.first_name, u.last_name, u.email
+      FROM complaints c
+      JOIN complaint_statuses cs ON c.status_id = cs.id
+      JOIN field_call_reports f ON f.complaint_id = c.id
+      JOIN users u ON c.created_by_id = u.id
+      WHERE cs.name = 'Resolved'
+        AND f.status = 'Submitted'
+        AND f.customer_confirmed_at IS NULL
+        AND f.auto_closed_at IS NULL
+        AND f.work_close_time <= NOW() - INTERVAL '72 hours'
+    `;
+    const res72 = await dbPool.query(query72);
+
+    if (res72.rows.length === 0) return;
+
+    logger.info(`SLA Daemon: Detected ${res72.rows.length} tickets eligible for 72h auto-close. Processing...`);
+
+    for (const row of res72.rows) {
+      const client = await dbPool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // 1. Lock complaint row
+        const compLockRes = await client.query(`
+          SELECT c.id, c.status_id, cs.name AS status_name
+          FROM complaints c
+          JOIN complaint_statuses cs ON c.status_id = cs.id
+          WHERE c.id = $1 FOR UPDATE
+        `, [row.id]);
+
+        if (compLockRes.rows.length === 0 || compLockRes.rows[0].status_name !== 'Resolved') {
+          await client.query('ROLLBACK');
+          client.release();
+          continue;
+        }
+
+        // 2. Atomically claim auto-closure in field_call_reports
+        // CRITICAL: customer_confirmed_at, customer_rating, customer_sign_name, customer_feedback MUST remain NULL
+        const claimRes = await client.query(`
+          UPDATE field_call_reports
+          SET auto_closed_at = CURRENT_TIMESTAMP,
+              status = 'Finalized',
+              call_close_time = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE complaint_id = $1
+            AND auto_closed_at IS NULL
+            AND customer_confirmed_at IS NULL
+            AND status = 'Submitted'
+            AND work_close_time <= NOW() - INTERVAL '72 hours'
+          RETURNING id
+        `, [row.id]);
+
+        if (claimRes.rows.length === 0) {
+          await client.query('ROLLBACK');
+          client.release();
+          continue;
+        }
+
+        // 3. Retrieve Closed status ID
+        const closedStatusRes = await client.query("SELECT id FROM complaint_statuses WHERE name = 'Closed'");
+        const closedStatusId = closedStatusRes.rows[0]?.id;
+
+        if (!closedStatusId) {
+          throw new Error('Closed status configuration is missing');
+        }
+
+        // 4. Update complaint status to Closed
+        await client.query(`
+          UPDATE complaints
+          SET status_id = $1,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+        `, [closedStatusId, row.id]);
+
+        // 5. Find system admin user for history log attribution
+        const adminUserRes = await client.query(`
+          SELECT u.id
+          FROM users u
+          JOIN roles r ON u.role_id = r.id
+          WHERE r.name = 'ADMIN' AND u.is_active = TRUE
+          LIMIT 1
+        `);
+        const systemAdminId = adminUserRes.rows[0]?.id || null;
+
+        // 6. Record status history with explicit auto-closure remark
+        const autoCloseRemark = 'System auto-closure: Closed after 72 hours without customer response following service resolution.';
+        await client.query(`
+          INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [row.id, systemAdminId, row.status_id, closedStatusId, autoCloseRemark]);
+
+        // 7. Transactionally persist customer notification
+        const creator = {
+          id: row.user_id,
+          first_name: row.first_name,
+          last_name: row.last_name,
+          email: row.email
+        };
+        await notifications.notifyAutoClosed(row, creator, client);
+
+        await client.query('COMMIT');
+        client.release();
+
+        logger.audit('SLA_AUTO_CLOSED', {
+          complaintId: row.id,
+          ticketNumber: row.ticket_number,
+          resolvedAt: row.work_close_time,
+          autoClosedAt: new Date().toISOString()
+        });
+
+      } catch (txErr) {
+        await client.query('ROLLBACK');
+        client.release();
+        console.error(`SLA Daemon: Failed to auto-close ticket #${row.ticket_number}:`, txErr.message);
+      }
+    }
+  } catch (err) {
+    console.error('SLA Daemon auto-closure query error:', err.message);
   }
 };
 
@@ -282,5 +572,7 @@ const startSlaScheduler = (intervalMs = 60000) => {
 
 module.exports = {
   checkSlaBreaches,
+  processResolutionReminders,
+  processAutoClosures,
   startSlaScheduler
 };

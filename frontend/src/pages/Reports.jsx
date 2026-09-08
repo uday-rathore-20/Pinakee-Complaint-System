@@ -125,57 +125,55 @@ const Reports = () => {
 
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-        <div>
+      {/* Page Header */}
+      <div className="page-header">
+        <div className="page-title-group">
           <h1>Reporting & Analytics Hub</h1>
-          {user && user.role === 'DEPT_HEAD' ? (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.2rem' }}>
-              ℹ️ Displaying metrics for your assigned department: <strong>{user.department}</strong>
-            </p>
-          ) : (
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.2rem' }}>
-              Viewing global system analytics and workloads.
-            </p>
-          )}
+          <p>
+            System-wide SLA compliance rates, customer CSAT satisfaction metrics, and volume trend telemetry
+          </p>
         </div>
-        <button className="btn btn-secondary" onClick={fetchReportsData} style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}>
-          🔄 Refresh Data
+        <button className="btn btn-secondary" onClick={fetchReportsData}>
+          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          Refresh Data
         </button>
       </div>
 
       {/* Tabs Menu */}
-      <div style={{ display: 'flex', borderBottom: '2px solid var(--border-color)', marginBottom: '1.5rem', gap: '1rem' }}>
+      <div style={{ display: 'flex', borderBottom: '2px solid var(--border-color)', marginBottom: '1.75rem', gap: '1rem' }}>
         <button
           onClick={() => setActiveTab('performance')}
           style={{
             background: 'none',
             border: 'none',
-            padding: '0.75rem 1rem',
+            padding: '0.65rem 1rem',
             cursor: 'pointer',
-            fontSize: '0.95rem',
-            fontWeight: 'bold',
+            fontSize: '0.9rem',
+            fontWeight: '600',
             color: activeTab === 'performance' ? 'var(--primary-color)' : 'var(--text-muted)',
             borderBottom: activeTab === 'performance' ? '3px solid var(--primary-color)' : '3px solid transparent',
             marginBottom: '-2px'
           }}
         >
-          Performance Dashboard
+          Performance & SLAs
         </button>
         <button
           onClick={() => setActiveTab('breakdown')}
           style={{
             background: 'none',
             border: 'none',
-            padding: '0.75rem 1rem',
+            padding: '0.65rem 1rem',
             cursor: 'pointer',
-            fontSize: '0.95rem',
-            fontWeight: 'bold',
+            fontSize: '0.9rem',
+            fontWeight: '600',
             color: activeTab === 'breakdown' ? 'var(--primary-color)' : 'var(--text-muted)',
             borderBottom: activeTab === 'breakdown' ? '3px solid var(--primary-color)' : '3px solid transparent',
             marginBottom: '-2px'
           }}
         >
-          Ticket Breakdowns
+          Volume & Breakdowns
         </button>
         {user && user.role === 'ADMIN' && (
           <button
@@ -183,16 +181,16 @@ const Reports = () => {
             style={{
               background: 'none',
               border: 'none',
-              padding: '0.75rem 1rem',
+              padding: '0.65rem 1rem',
               cursor: 'pointer',
-              fontSize: '0.95rem',
-              fontWeight: 'bold',
+              fontSize: '0.9rem',
+              fontWeight: '600',
               color: activeTab === 'exports' ? 'var(--primary-color)' : 'var(--text-muted)',
               borderBottom: activeTab === 'exports' ? '3px solid var(--primary-color)' : '3px solid transparent',
               marginBottom: '-2px'
             }}
           >
-            CSV Export Hub
+            CSV Export Center
           </button>
         )}
       </div>

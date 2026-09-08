@@ -115,72 +115,125 @@ const Login = () => {
   };
 
   return (
-    <div className="login-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', alignItems: 'center' }}>
+    <div className="login-wrapper">
       <div className="login-card">
-        <h1 className="login-logo">PINakee</h1>
-        <p className="login-subtitle">Complaint Management System</p>
+        <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
+          <img
+            src="/pinakee-logo.png"
+            alt="PINakee Tech Solutions LLP"
+            className="login-logo-img"
+          />
+          <p className="login-tagline">
+            Enterprise Complaint & Service Management Platform
+          </p>
+        </div>
         
-        {error && <div className="alert alert-danger" style={{ whiteSpace: 'pre-line' }}>{error}</div>}
-        {success && <div className="alert alert-success">{success}</div>}
+        {error && (
+          <div className="alert alert-danger" style={{ whiteSpace: 'pre-line', marginBottom: '1.25rem' }}>
+            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+            <div>{error}</div>
+          </div>
+        )}
+
+        {success && (
+          <div className="alert alert-success" style={{ marginBottom: '1.25rem' }}>
+            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/>
+            </svg>
+            <div>{success}</div>
+          </div>
+        )}
 
         {view === 'login' && (
           <form onSubmit={handleLoginSubmit}>
             <div className="form-group">
-              <label className="form-label">Email Address</label>
-              <input
-                type="email"
-                className="form-input"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="e.g. admin@pinakee.com"
-                required
-              />
+              <label className="form-label">Work Email Address</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="email"
+                  className="form-input"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="e.g. admin@pinakee.com"
+                  required
+                  style={{ paddingLeft: '2.4rem' }}
+                />
+                <svg
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                  style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)' }}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16 12a4 4 0 10-8 0 4 4 0 008 0zm0 0v1.5a2.5 2.5 0 005 0V12a9 9 0 10-9 9m4.5-1.206a8.959 8.959 0 01-4.5 1.207"/>
+                </svg>
+              </div>
             </div>
 
-            <div className="form-group">
-              <label className="form-label">Password</label>
-              <input
-                type="password"
-                className="form-input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-              />
+            <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                <label className="form-label" style={{ margin: 0 }}>Password</label>
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', color: 'var(--primary-color)', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                  onClick={() => {
+                    setView('forgot');
+                    setError('');
+                    setSuccess('');
+                  }}
+                >
+                  Forgot password?
+                </button>
+              </div>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="password"
+                  className="form-input"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  style={{ paddingLeft: '2.4rem' }}
+                />
+                <svg
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                  style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)' }}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                </svg>
+              </div>
             </div>
 
             <button
               type="submit"
               className="btn btn-primary btn-block"
               disabled={submitting}
-              style={{ marginBottom: '1rem' }}
+              style={{ padding: '0.7rem 1rem' }}
             >
-              {submitting ? 'Authenticating...' : 'Sign In'}
+              {submitting ? 'Authenticating...' : 'Sign In to Dashboard'}
             </button>
-
-            <div style={{ textAlign: 'center' }}>
-              <button
-                type="button"
-                className="btn-link"
-                style={{ background: 'none', border: 'none', color: 'var(--primary-light)', cursor: 'pointer', fontSize: '0.875rem' }}
-                onClick={() => {
-                  setView('forgot');
-                  setError('');
-                  setSuccess('');
-                }}
-              >
-                Forgot Password?
-              </button>
-            </div>
           </form>
         )}
 
         {view === 'forgot' && (
           <form onSubmit={handleForgotSubmit}>
-            <h3 style={{ marginBottom: '1rem', textAlign: 'center' }}>Reset Your Password</h3>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.25rem', textAlign: 'center' }}>
-              Enter the email address registered with your account. We will send a secure validation code to reset your password.
-            </p>
+            <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
+              <h3 style={{ fontSize: '1.15rem', fontWeight: '700', color: 'var(--text-main)', marginBottom: '0.35rem' }}>
+                Reset Your Password
+              </h3>
+              <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                Enter your registered work email. We will send a secure validation code to reset your credentials.
+              </p>
+            </div>
 
             <div className="form-group">
               <label className="form-label">Email Address</label>
@@ -198,36 +251,34 @@ const Login = () => {
               type="submit"
               className="btn btn-primary btn-block"
               disabled={submitting}
-              style={{ marginBottom: '1rem' }}
+              style={{ marginBottom: '1.25rem' }}
             >
               {submitting ? 'Requesting Code...' : 'Send Recovery Code'}
             </button>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem' }}>
               <button
                 type="button"
-                className="btn-link"
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontWeight: '600' }}
                 onClick={() => {
                   setView('login');
                   setError('');
                   setSuccess('');
                 }}
               >
-                ← Back to Sign In
+                &larr; Back to Sign In
               </button>
 
               <button
                 type="button"
-                className="btn-link"
-                style={{ background: 'none', border: 'none', color: 'var(--primary-light)', cursor: 'pointer' }}
+                style={{ background: 'none', border: 'none', color: 'var(--primary-color)', cursor: 'pointer', fontWeight: '600' }}
                 onClick={() => {
                   setView('reset');
                   setError('');
                   setSuccess('');
                 }}
               >
-                Enter Recovery Code →
+                Have a Code? Enter &rarr;
               </button>
             </div>
           </form>
@@ -235,10 +286,14 @@ const Login = () => {
 
         {view === 'reset' && (
           <form onSubmit={handleResetSubmit}>
-            <h3 style={{ marginBottom: '1rem', textAlign: 'center' }}>Enter Validation Code</h3>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.25rem', textAlign: 'center' }}>
-              Copy the recovery token generated for your email address to set a new password.
-            </p>
+            <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
+              <h3 style={{ fontSize: '1.15rem', fontWeight: '700', color: 'var(--text-main)', marginBottom: '0.35rem' }}>
+                Enter Validation Code
+              </h3>
+              <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                Enter the recovery token and specify your new secure password.
+              </p>
+            </div>
 
             <div className="form-group">
               <label className="form-label">Recovery Token / Code</label>
@@ -247,7 +302,7 @@ const Login = () => {
                 className="form-input"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
-                placeholder="Enter 64-char secure token"
+                placeholder="Paste 64-char security token"
                 required
               />
             </div>
@@ -259,7 +314,7 @@ const Login = () => {
                 className="form-input"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="Minimum 6 characters"
                 required
               />
             </div>
@@ -268,23 +323,22 @@ const Login = () => {
               type="submit"
               className="btn btn-primary btn-block"
               disabled={submitting}
-              style={{ marginBottom: '1rem' }}
+              style={{ marginBottom: '1.25rem' }}
             >
-              {submitting ? 'Resetting Password...' : 'Reset Password'}
+              {submitting ? 'Resetting Password...' : 'Save New Password'}
             </button>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem' }}>
+            <div style={{ textAlign: 'center', fontSize: '0.82rem' }}>
               <button
                 type="button"
-                className="btn-link"
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontWeight: '600' }}
                 onClick={() => {
                   setView('forgot');
                   setError('');
                   setSuccess('');
                 }}
               >
-                ← Back
+                &larr; Back to Recovery
               </button>
             </div>
           </form>

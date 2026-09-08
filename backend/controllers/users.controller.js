@@ -22,7 +22,7 @@ const getUsers = async (req, res) => {
     }
 
     let query = `
-      SELECT u.id, u.first_name, u.last_name, u.email, u.is_active, 
+      SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number, u.address, u.city, u.state, u.pincode, u.is_active,
              r.name AS role, d.name AS department, u.created_at, u.updated_at
       FROM users u
       JOIN roles r ON u.role_id = r.id
@@ -82,7 +82,7 @@ const getUserById = async (req, res) => {
     }
 
     const query = `
-      SELECT u.id, u.first_name, u.last_name, u.email, u.is_active, 
+      SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number, u.address, u.city, u.state, u.pincode, u.is_active,
              r.name AS role, d.name AS department, u.created_at, u.updated_at
       FROM users u
       JOIN roles r ON u.role_id = r.id
@@ -410,7 +410,7 @@ const updateUserStatus = async (req, res) => {
 
 const updateUserProfile = async (req, res) => {
   const userId = req.user.id;
-  const { first_name, last_name } = req.body;
+  const { first_name, last_name, phone_number, address, city, state, pincode } = req.body;
 
   if (!first_name || !last_name) {
     return res.status(400).json({ success: false, message: 'First name and last name are required' });
@@ -423,11 +423,26 @@ const updateUserProfile = async (req, res) => {
 
     const query = `
       UPDATE users 
-      SET first_name = $1, last_name = $2, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $3
+      SET first_name = $1, last_name = $2,
+          phone_number = COALESCE($3, phone_number),
+          address = COALESCE($4, address),
+          city = COALESCE($5, city),
+          state = COALESCE($6, state),
+          pincode = COALESCE($7, pincode),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $8
       RETURNING id
     `;
-    const result = await dbPool.query(query, [first_name.trim(), last_name.trim(), userId]);
+    const result = await dbPool.query(query, [
+      first_name.trim(),
+      last_name.trim(),
+      phone_number !== undefined ? phone_number?.trim() : null,
+      address !== undefined ? address?.trim() : null,
+      city !== undefined ? city?.trim() : null,
+      state !== undefined ? state?.trim() : null,
+      pincode !== undefined ? pincode?.trim() : null,
+      userId
+    ]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
@@ -435,7 +450,7 @@ const updateUserProfile = async (req, res) => {
 
     // Fetch the complete profile details with text names for role/department
     const fetchQuery = `
-      SELECT u.id, u.first_name, u.last_name, u.email, u.is_active, 
+      SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number, u.address, u.city, u.state, u.pincode, u.is_active,
              r.name AS role, d.name AS department, u.created_at, u.updated_at
       FROM users u
       JOIN roles r ON u.role_id = r.id

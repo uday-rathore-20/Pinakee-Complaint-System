@@ -1,7 +1,64 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { getJwtSecret } = require('./jwt');
+
+/**
+ * Resolve HMAC signing secret for local storage tokens.
+ * Uses STORAGE_HMAC_SECRET if configured, otherwise reuses the production-hardened JWT_SECRET.
+ */
+const getHmacSecret = () => {
+  return process.env.STORAGE_HMAC_SECRET || getJwtSecret();
+};
+
+/**
+ * Generate a cryptographically secure HMAC SHA256 token for time-limited local file downloads.
+ * @param {string} filename - Target basename of the file
+ * @param {number} expires - Epoch timestamp (in seconds)
+ * @returns {string} Hex-encoded HMAC signature
+ */
+const generateLocalDownloadToken = (filename, expires) => {
+  const secret = getHmacSecret();
+  const data = `${filename}:${expires}`;
+  return crypto.createHmac('sha256', secret).update(data).digest('hex');
+};
+
+/**
+ * Verify a local download token against expected signature, expiration, and path safety.
+ * Uses constant-time comparison to prevent timing side-channel attacks.
+ * @param {string} filename - File basename from request parameters
+ * @param {string|number} expires - Expiration timestamp from query
+ * @param {string} token - HMAC signature token from query
+ * @returns {boolean} True if signature is authentic and unexpired
+ */
+const verifyLocalDownloadToken = (filename, expires, token) => {
+  if (!filename || !expires || !token) return false;
+
+  // Prevent path traversal in filename parameter
+  const cleanFilename = path.basename(filename);
+  if (cleanFilename !== filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    return false;
+  }
+
+  const expiresNum = parseInt(expires, 10);
+  if (isNaN(expiresNum) || expiresNum <= 0) return false;
+
+  const currentEpoch = Math.floor(Date.now() / 1000);
+  if (currentEpoch > expiresNum) return false;
+
+  const expectedToken = generateLocalDownloadToken(cleanFilename, expiresNum);
+
+  try {
+    const tokenBuf = Buffer.from(token, 'hex');
+    const expectedBuf = Buffer.from(expectedToken, 'hex');
+    if (tokenBuf.length !== expectedBuf.length) return false;
+    return crypto.timingSafeEqual(tokenBuf, expectedBuf);
+  } catch (err) {
+    return false;
+  }
+};
 
 class StorageDriver {
   async saveFile(file, detectedMimeType) {
@@ -32,27 +89,22 @@ class S3StorageDriver extends StorageDriver {
     super();
 
     const isProd = process.env.NODE_ENV === 'production';
+    const driverConfig = (process.env.STORAGE_DRIVER || (isProd ? 's3' : 'local')).toLowerCase();
+
+    if (driverConfig !== 'local' && driverConfig !== 's3' && driverConfig !== 'mock') {
+      throw new Error(`CRITICAL CONFIGURATION ERROR: Invalid STORAGE_DRIVER "${process.env.STORAGE_DRIVER}". Supported values are "local" and "s3".`);
+    }
+
     const hasS3Config = process.env.AWS_ACCESS_KEY_ID &&
                         !process.env.AWS_ACCESS_KEY_ID.startsWith('mock_') &&
                         process.env.AWS_SECRET_ACCESS_KEY &&
                         process.env.AWS_S3_BUCKET;
 
-    // Critical fail-safe in production environment
-    if (isProd && !hasS3Config) {
-      throw new Error('CRITICAL CONFIGURATION ERROR: AWS S3 configuration parameters are missing or invalid in production environment.');
-    }
-
-    this.useMock = process.env.NODE_ENV === 'test' ||
-                   process.env.STORAGE_DRIVER === 'mock' ||
-                   (!isProd && !hasS3Config);
-
-    if (this.useMock) {
-      console.log('AWS S3: Initializing local mock storage driver simulator (test/dev mode).');
-      this.uploadDir = path.join(__dirname, '..', 'uploads');
-      if (!fs.existsSync(this.uploadDir)) {
-        fs.mkdirSync(this.uploadDir, { recursive: true });
+    if (driverConfig === 's3') {
+      if (!hasS3Config) {
+        throw new Error('CRITICAL CONFIGURATION ERROR: AWS S3 configuration parameters (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET) are missing or invalid.');
       }
-    } else {
+      this.useMock = false;
       this.s3Client = new S3Client({
         region: process.env.AWS_REGION || 'us-east-1',
         credentials: {
@@ -61,7 +113,15 @@ class S3StorageDriver extends StorageDriver {
         }
       });
       this.bucketName = process.env.AWS_S3_BUCKET;
+    } else {
+      // Local storage driver (for dev, test, or production on-premise local disk)
+      this.useMock = true;
+      this.uploadDir = path.join(__dirname, '..', 'uploads');
+      if (!fs.existsSync(this.uploadDir)) {
+        fs.mkdirSync(this.uploadDir, { recursive: true });
+      }
     }
+
     this.archiveDir = path.join(__dirname, '..', 'archives');
     if (!fs.existsSync(this.archiveDir)) {
       fs.mkdirSync(this.archiveDir, { recursive: true });
@@ -97,14 +157,18 @@ class S3StorageDriver extends StorageDriver {
   }
 
   /**
-   * Get pre-signed download URL (or mock simulation path).
+   * Get pre-signed download URL (or HMAC-signed local URL).
    * @param {string} objectKey - File S3 key
    * @param {string} fileName - Original filename
-   * @returns {Promise<string>} Pre-signed URL string
+   * @returns {Promise<string>} Signed URL string
    */
   async getDownloadUrl(objectKey, fileName) {
     if (this.useMock) {
-      return `/api/attachments/mock-download/${path.basename(objectKey)}?fileName=${encodeURIComponent(fileName)}`;
+      const baseFilename = path.basename(objectKey);
+      const expiresInSec = 900; // 15 minutes
+      const expires = Math.floor(Date.now() / 1000) + expiresInSec;
+      const token = generateLocalDownloadToken(baseFilename, expires);
+      return `/api/attachments/mock-download/${baseFilename}?fileName=${encodeURIComponent(fileName)}&expires=${expires}&token=${token}`;
     } else {
       const command = new GetObjectCommand({
         Bucket: this.bucketName,
@@ -241,5 +305,11 @@ class S3StorageDriver extends StorageDriver {
 }
 
 const storage = new S3StorageDriver();
+storage.generateLocalDownloadToken = generateLocalDownloadToken;
+storage.verifyLocalDownloadToken = verifyLocalDownloadToken;
+storage.getHmacSecret = getHmacSecret;
 
 module.exports = storage;
+module.exports.generateLocalDownloadToken = generateLocalDownloadToken;
+module.exports.verifyLocalDownloadToken = verifyLocalDownloadToken;
+module.exports.getHmacSecret = getHmacSecret;

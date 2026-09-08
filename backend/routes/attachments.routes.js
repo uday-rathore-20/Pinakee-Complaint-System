@@ -9,6 +9,7 @@ const {
   mockDownloadAttachment,
 } = require('../controllers/attachments.controller');
 const { authenticateJWT } = require('../middleware/auth');
+const { uploadRateLimiter } = require('../middleware/rateLimiter');
 
 // Configure multer parser for memory buffer uploading (max 5MB file size limit)
 const upload = multer({
@@ -18,8 +19,8 @@ const upload = multer({
   }
 });
 
-// Post attachment to a specific complaint (JWT check + Multer check)
-router.post('/complaints/:id/attachments', authenticateJWT, upload.single('file'), uploadAttachment);
+// Post attachment to a specific complaint (JWT check + Rate limiter + Multer check)
+router.post('/complaints/:id/attachments', authenticateJWT, uploadRateLimiter, upload.single('file'), uploadAttachment);
 
 // Get list of attachments for a complaint
 router.get('/complaints/:id/attachments', authenticateJWT, getAttachments);
@@ -32,5 +33,6 @@ router.get('/attachments/mock-download/:filename', mockDownloadAttachment);
 
 // Delete file attachment securely (resolves by attachment ID)
 router.delete('/attachments/:id', authenticateJWT, deleteAttachment);
+router.delete('/complaints/:complaintId/attachments/:id', authenticateJWT, deleteAttachment);
 
 module.exports = router;

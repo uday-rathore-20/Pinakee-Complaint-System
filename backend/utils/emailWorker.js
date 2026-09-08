@@ -6,6 +6,40 @@ const logger = require('./logger');
 let workerIntervalId = null;
 let isProcessing = false;
 
+let cachedTransporter = null;
+let cachedTransporterConfigKey = null;
+
+/**
+ * Returns a cached Nodemailer transporter or creates a new one if configuration changed.
+ * Configured with explicit connection, greeting, and socket timeouts.
+ */
+function getTransporter() {
+  if (!process.env.SMTP_HOST) return null;
+
+  const currentConfigKey = `${process.env.SMTP_HOST}:${process.env.SMTP_PORT || '587'}:${process.env.SMTP_SECURE}:${process.env.SMTP_USER}:${process.env.SMTP_PASS}`;
+
+  if (cachedTransporter && cachedTransporterConfigKey === currentConfigKey) {
+    return cachedTransporter;
+  }
+
+  const nodemailer = require('nodemailer');
+  cachedTransporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+    connectionTimeout: 10000, // 10 seconds timeout for establishing TCP connection
+    greetingTimeout: 10000,   // 10 seconds timeout for receiving SMTP greeting banner
+    socketTimeout: 30000,     // 30 seconds timeout for inactivity during transmission
+  });
+
+  cachedTransporterConfigKey = currentConfigKey;
+  return cachedTransporter;
+}
+
 /**
  * Dispatch the email using either the simulator (dev/test) or SMTP (production).
  */
@@ -35,16 +69,10 @@ async function sendEmail(recipient, subject, body) {
   } else {
     // 2. Production mode: SMTP Nodemailer dispatch
     try {
-      const nodemailer = require('nodemailer');
-      const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT || '587', 10),
-        secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        },
-      });
+      const transporter = getTransporter();
+      if (!transporter) {
+        return { success: false, error: 'SMTP transporter is unavailable' };
+      }
 
       await transporter.sendMail({
         from: process.env.SMTP_FROM || '"PINakee System" <noreply@pinakee.com>',
@@ -224,4 +252,7 @@ module.exports = {
   start,
   stop,
   processQueue,
+  processNextJob,
+  sendEmail,
+  getTransporter,
 };

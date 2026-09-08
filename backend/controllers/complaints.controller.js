@@ -31,10 +31,7 @@ const generateTicketNumber = async () => {
 const verifyComplaintAccess = (user, complaint) => {
   if (user.role === 'ADMIN') return true;
   if (user.role === 'ENGINEER' || user.role === 'AGENT') {
-    if (complaint.assigned_to_id === user.id) return true;
-    if (complaint.assigned_to_id === null) {
-      if (!complaint.department_id || !user.department_id || complaint.department_id === user.department_id) return true;
-    }
+    return complaint.assigned_to_id === user.id;
   }
   if (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id) return true;
   if (user.role === 'CUSTOMER' && complaint.created_by_id === user.id) return true;
@@ -46,7 +43,7 @@ const verifyComplaintAccess = (user, complaint) => {
  * GET /api/complaints
  */
 const getComplaints = async (req, res) => {
-  const { status, priority, category, department, search, limit, offset, overdue, escalated } = req.query;
+  const { status, priority, category, department, search, limit, offset, overdue, escalated, queue } = req.query;
   const user = req.user;
 
   try {
@@ -62,7 +59,7 @@ const getComplaints = async (req, res) => {
 
     let query = `
       SELECT c.id, c.ticket_number, c.title, c.description, c.created_at, c.updated_at, c.due_date, c.is_sla_breached,
-             c.is_escalated, c.escalated_at, c.escalation_level,
+             c.is_escalated, c.escalated_at, c.escalation_level, c.hold_reason, c.reopen_reason, c.cancellation_reason,
              u_creator.id AS creator_id, u_creator.first_name AS creator_first_name, u_creator.last_name AS creator_last_name, u_creator.email AS creator_email,
              cc.name AS category, cs.name AS status, cp.name AS priority,
              dept.name AS department, dept.id AS department_id,
@@ -70,7 +67,7 @@ const getComplaints = async (req, res) => {
              COUNT(*) OVER() AS total_count
        FROM complaints c
        JOIN users u_creator ON c.created_by_id = u_creator.id
-       JOIN complaint_categories cc ON c.category_id = cc.id
+       LEFT JOIN complaint_categories cc ON c.category_id = cc.id
        JOIN complaint_statuses cs ON c.status_id = cs.id
        JOIN complaint_priorities cp ON c.priority_id = cp.id
        LEFT JOIN departments dept ON c.department_id = dept.id
@@ -81,8 +78,6 @@ const getComplaints = async (req, res) => {
     const queryParams = [];
 
     // 1. Enforce role-based boundaries
-    const { queue } = req.query;
-
     if (user.role === 'DEPT_HEAD') {
       if (user.department_id) {
         queryParams.push(user.department_id);
@@ -92,14 +87,14 @@ const getComplaints = async (req, res) => {
         whereClauses.push(`c.assigned_to_id IS NULL`);
       }
     } else if (user.role === 'ENGINEER' || user.role === 'AGENT') {
-      if (queue === 'unassigned') {
-        whereClauses.push(`c.assigned_to_id IS NULL`);
-      } else if (queue === 'my') {
-        queryParams.push(user.id);
-        whereClauses.push(`c.assigned_to_id = $${queryParams.length}`);
+      // Engineers can ONLY see complaints specifically assigned to them
+      queryParams.push(user.id);
+      if (queue === 'claim_required' || queue === 'assigned') {
+        whereClauses.push(`c.assigned_to_id = $${queryParams.length} AND cs.name = 'Assigned'`);
+      } else if (queue === 'my' || queue === 'active') {
+        whereClauses.push(`c.assigned_to_id = $${queryParams.length} AND cs.name != 'Assigned'`);
       } else {
-        queryParams.push(user.id);
-        whereClauses.push(`(c.assigned_to_id = $${queryParams.length} OR c.assigned_to_id IS NULL)`);
+        whereClauses.push(`c.assigned_to_id = $${queryParams.length}`);
       }
     } else if (user.role === 'CUSTOMER') {
       queryParams.push(user.id);
@@ -203,16 +198,26 @@ const getComplaintById = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
     }
 
-    // Fetch complaint
+    // Fetch complaint with customer, engineer, and service location details
     const query = `
       SELECT c.*,
              u_creator.first_name AS creator_first_name, u_creator.last_name AS creator_last_name, u_creator.email AS creator_email,
+             u_creator.phone_number AS creator_phone_number, u_creator.address AS creator_address,
+             u_creator.city AS creator_city, u_creator.state AS creator_state, u_creator.pincode AS creator_pincode,
+             csl.location_code AS service_location_code, csl.location_name AS service_location_name,
+             csl.address AS service_location_address, csl.city AS service_location_city,
+             csl.state AS service_location_state, csl.pincode AS service_location_pincode,
+             csl.contact_person AS service_location_contact_person, csl.contact_number AS service_location_contact_number,
+             csl.email AS service_location_email,
              cc.name AS category, cs.name AS status, cp.name AS priority,
              dept.name AS department,
-             u_assignee.first_name AS assignee_first_name, u_assignee.last_name AS assignee_last_name
+             u_assignee.first_name AS assignee_first_name, u_assignee.last_name AS assignee_last_name, u_assignee.email AS assignee_email,
+             u_assignee.phone_number AS assignee_phone_number, u_assignee.address AS assignee_address,
+             u_assignee.city AS assignee_city, u_assignee.state AS assignee_state, u_assignee.pincode AS assignee_pincode
       FROM complaints c
       JOIN users u_creator ON c.created_by_id = u_creator.id
-      JOIN complaint_categories cc ON c.category_id = cc.id
+      LEFT JOIN customer_service_locations csl ON c.service_location_id = csl.id
+      LEFT JOIN complaint_categories cc ON c.category_id = cc.id
       JOIN complaint_statuses cs ON c.status_id = cs.id
       JOIN complaint_priorities cp ON c.priority_id = cp.id
       LEFT JOIN departments dept ON c.department_id = dept.id
@@ -266,10 +271,120 @@ const getComplaintById = async (req, res) => {
     `;
     const historyResult = await dbPool.query(historyQuery, [id]);
 
+    // Check if engineer has claimed the ticket
+    const isEngineerUnclaimed = (user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.status === 'Assigned';
+
+    if (isEngineerUnclaimed) {
+      const minimalComplaint = {
+        id: complaint.id,
+        ticket_number: complaint.ticket_number,
+        title: complaint.title,
+        priority: complaint.priority,
+        priority_id: complaint.priority_id,
+        status: complaint.status,
+        status_id: complaint.status_id,
+        category: complaint.category,
+        category_id: complaint.category_id,
+        created_at: complaint.created_at,
+        due_date: complaint.due_date,
+        assigned_to_id: complaint.assigned_to_id,
+        is_claim_required: true,
+        description: 'Please claim this ticket to view full description and customer details.',
+        creator_first_name: 'Customer',
+        creator_last_name: '',
+        creator_email: '***@***.***',
+        creator_phone_number: null,
+        creator_address: null,
+        creator_city: null,
+        creator_state: null,
+        creator_pincode: null,
+        service_location_name: null,
+        service_location_address: null
+      };
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          complaint: minimalComplaint,
+          customer: null,
+          engineer: {
+            id: user.id,
+            name: `${user.first_name || ''} ${user.last_name || ''}`.trim(),
+            email: user.email,
+            status: complaint.status
+          },
+          comments: [],
+          status_history: historyResult.rows.filter(h => h.new_status === 'Pending' || h.new_status === 'Assigned')
+        }
+      });
+    }
+
+    // Service Location details
+    const serviceLocation = complaint.service_location_id ? {
+      id: complaint.service_location_id,
+      code: complaint.service_location_code,
+      name: complaint.service_location_name,
+      address: complaint.service_location_address,
+      city: complaint.service_location_city,
+      state: complaint.service_location_state,
+      pincode: complaint.service_location_pincode,
+      contact_person: complaint.service_location_contact_person,
+      contact_number: complaint.service_location_contact_number,
+      email: complaint.service_location_email
+    } : null;
+
+    // Full customer operational profile
+    const customerProfile = {
+      name: `${complaint.creator_first_name || ''} ${complaint.creator_last_name || ''}`.trim(),
+      first_name: complaint.creator_first_name,
+      last_name: complaint.creator_last_name,
+      email: complaint.creator_email,
+      phone: complaint.service_location_contact_number || complaint.creator_phone_number,
+      address: complaint.service_location_address || complaint.creator_address,
+      city: complaint.service_location_city || complaint.creator_city,
+      state: complaint.service_location_state || complaint.creator_state,
+      pincode: complaint.service_location_pincode || complaint.creator_pincode,
+      location_name: complaint.service_location_name || null,
+      service_location: serviceLocation
+    };
+
+    // Engineer profile based on caller role
+    let engineerProfile = null;
+    if (complaint.assigned_to_id) {
+      if (user.role === 'ADMIN') {
+        engineerProfile = {
+          id: complaint.assigned_to_id,
+          name: `${complaint.assignee_first_name || ''} ${complaint.assignee_last_name || ''}`.trim(),
+          first_name: complaint.assignee_first_name,
+          last_name: complaint.assignee_last_name,
+          email: complaint.assignee_email,
+          phone: complaint.assignee_phone_number,
+          address: complaint.assignee_address,
+          city: complaint.assignee_city,
+          state: complaint.assignee_state,
+          pincode: complaint.assignee_pincode,
+          status: complaint.status
+        };
+      } else {
+        // Customer and Assigned Engineer receive service communication contact (without private home address)
+        engineerProfile = {
+          id: complaint.assigned_to_id,
+          name: `${complaint.assignee_first_name || ''} ${complaint.assignee_last_name || ''}`.trim(),
+          first_name: complaint.assignee_first_name,
+          last_name: complaint.assignee_last_name,
+          email: complaint.assignee_email,
+          phone: complaint.assignee_phone_number,
+          status: complaint.status
+        };
+      }
+    }
+
     return res.status(200).json({
       success: true,
       data: {
-        complaint,
+        complaint: { ...complaint, is_claim_required: false },
+        customer: customerProfile,
+        engineer: engineerProfile,
         comments: commentsResult.rows,
         status_history: historyResult.rows
       }
@@ -285,12 +400,12 @@ const getComplaintById = async (req, res) => {
  * POST /api/complaints
  */
 const createComplaint = async (req, res) => {
-  const { title, description, category_id, priority_id, created_by_id, department_id } = req.body;
+  const { title, description, category_id, priority_id, created_by_id, department_id, service_location_id } = req.body;
   const user = req.user;
 
   // Validation
-  if (!title || !description || !category_id || !priority_id) {
-    return res.status(400).json({ success: false, message: 'Title, description, category_id, and priority_id are required' });
+  if (!title || !description || !priority_id) {
+    return res.status(400).json({ success: false, message: 'Title, description, and priority_id are required' });
   }
 
   try {
@@ -309,10 +424,30 @@ const createComplaint = async (req, res) => {
       }
     }
 
-    // Verify category and priority exist
-    const catCheck = await dbPool.query('SELECT id FROM complaint_categories WHERE id = $1', [category_id]);
-    if (catCheck.rows.length === 0) {
-      return res.status(400).json({ success: false, message: 'Invalid category_id' });
+    // Validate service_location_id if provided
+    let validatedLocationId = null;
+    let locationAddressSnapshot = null;
+    if (service_location_id !== undefined && service_location_id !== null && service_location_id !== '') {
+      const locCheck = await dbPool.query(
+        'SELECT id, location_name, address, city, state, pincode, contact_person, contact_number FROM customer_service_locations WHERE id = $1 AND customer_id = $2 AND is_active = true',
+        [service_location_id, targetCreatorId]
+      );
+      if (locCheck.rows.length === 0) {
+        return res.status(400).json({ success: false, message: 'Selected service location is invalid or inactive' });
+      }
+      const loc = locCheck.rows[0];
+      validatedLocationId = loc.id;
+      locationAddressSnapshot = `${loc.location_name}: ${loc.address}, ${loc.city}, ${loc.state} - ${loc.pincode}` + (loc.contact_person ? ` (Contact: ${loc.contact_person} ${loc.contact_number || ''})` : '');
+    }
+
+    // Verify category if provided
+    let validatedCategoryId = null;
+    if (category_id !== undefined && category_id !== null && category_id !== '') {
+      const catCheck = await dbPool.query('SELECT id FROM complaint_categories WHERE id = $1', [category_id]);
+      if (catCheck.rows.length === 0) {
+        return res.status(400).json({ success: false, message: 'Invalid category_id' });
+      }
+      validatedCategoryId = parseInt(category_id, 10);
     }
 
     const priCheck = await dbPool.query('SELECT id, sla_hours FROM complaint_priorities WHERE id = $1', [priority_id]);
@@ -365,8 +500,12 @@ const createComplaint = async (req, res) => {
 
       // Insert
       const insertQuery = `
-        INSERT INTO complaints (ticket_number, title, description, created_by_id, category_id, status_id, priority_id, due_date, department_id, assigned_to_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        INSERT INTO complaints (
+          ticket_number, title, description, created_by_id, category_id,
+          status_id, priority_id, due_date, department_id, assigned_to_id,
+          service_location_id, service_address_snapshot
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING *
       `;
       const insertRes = await client.query(insertQuery, [
@@ -374,12 +513,14 @@ const createComplaint = async (req, res) => {
         title.trim(),
         description.trim(),
         targetCreatorId,
-        category_id,
+        validatedCategoryId,
         targetStatusId,
         priority_id,
         dueDate,
         targetDeptId,
-        assignedAgentId
+        assignedAgentId,
+        validatedLocationId,
+        locationAddressSnapshot
       ]);
 
       resultComplaint = insertRes.rows[0];
@@ -405,7 +546,11 @@ const createComplaint = async (req, res) => {
     logger.audit('COMPLAINT_CREATED', { complaintId: resultComplaint.id, ticketNumber: resultComplaint.ticket_number }, user, req.ip);
 
     const notifications = require('../utils/notifications');
-    notifications.notifyComplaintCreated(resultComplaint).catch(err => console.error('Failed to trigger in-app notification:', err));
+    try {
+      await notifications.notifyComplaintCreated(resultComplaint);
+    } catch (err) {
+      console.error('Failed to trigger in-app notification:', err);
+    }
 
     return res.status(201).json({
       success: true,
@@ -449,15 +594,16 @@ const updateComplaint = async (req, res) => {
 
     // Enforce editing privileges
     const isAdmin = user.role === 'ADMIN';
-    const isCreator = complaint.created_by_id === user.id;
+    const isAssignedEngineer = (user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id && complaint.status !== 'Assigned';
+    const isCreator = user.role === 'CUSTOMER' && complaint.created_by_id === user.id;
 
-    if (!isAdmin && !isCreator) {
+    if (!isAdmin && !isCreator && !isAssignedEngineer) {
       logger.audit('UNAUTHORIZED_ACCESS_BLOCKED', { complaintId: id, action: 'update' }, user, req.ip);
       return res.status(403).json({ success: false, message: 'Forbidden: You cannot modify this complaint' });
     }
 
     // Creators can only update if status is Pending
-    if (!isAdmin && complaint.status !== 'Pending') {
+    if (isCreator && !isAdmin && complaint.status !== 'Pending') {
       return res.status(400).json({ success: false, message: 'Complaints can only be modified when their status is Pending' });
     }
 
@@ -465,26 +611,31 @@ const updateComplaint = async (req, res) => {
     const updateFields = [];
     const values = [];
 
-    if (title) {
+    if (title && (isAdmin || isCreator)) {
       values.push(title.trim());
       updateFields.push(`title = $${values.length}`);
     }
 
-    if (description) {
+    if (description && (isAdmin || isCreator)) {
       values.push(description.trim());
       updateFields.push(`description = $${values.length}`);
     }
 
-    if (category_id) {
-      const catCheck = await dbPool.query('SELECT id FROM complaint_categories WHERE id = $1', [category_id]);
-      if (catCheck.rows.length === 0) {
-        return res.status(400).json({ success: false, message: 'Invalid category_id' });
+    if (category_id !== undefined) {
+      if (category_id === null || category_id === '') {
+        values.push(null);
+        updateFields.push(`category_id = $${values.length}`);
+      } else {
+        const catCheck = await dbPool.query('SELECT id FROM complaint_categories WHERE id = $1', [category_id]);
+        if (catCheck.rows.length === 0) {
+          return res.status(400).json({ success: false, message: 'Invalid category_id' });
+        }
+        values.push(parseInt(category_id, 10));
+        updateFields.push(`category_id = $${values.length}`);
       }
-      values.push(category_id);
-      updateFields.push(`category_id = $${values.length}`);
     }
 
-    if (priority_id) {
+    if (priority_id && (isAdmin || isCreator)) {
       const priCheck = await dbPool.query('SELECT id, sla_hours FROM complaint_priorities WHERE id = $1', [priority_id]);
       if (priCheck.rows.length === 0) {
         return res.status(400).json({ success: false, message: 'Invalid priority_id' });
@@ -599,12 +750,14 @@ const assignComplaint = async (req, res) => {
     let finalDeptId = department_id !== undefined ? department_id : complaint.department_id;
     let finalAssigneeId = assigned_to_id !== undefined ? assigned_to_id : complaint.assigned_to_id;
 
-    // Check if assignment triggers automatic status change from "Pending" to "Assigned"
+    // Check if assignment triggers automatic status change from "Pending" or "Admin Review" to "Assigned"
     const pendingStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Pending'");
     const assignedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Assigned'");
+    const adminReviewStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Admin Review'");
 
     const pendingId = pendingStatusResult.rows[0]?.id;
     const assignedId = assignedStatusResult.rows[0]?.id;
+    const adminReviewId = adminReviewStatusResult.rows[0]?.id;
 
     // Execute within a database transaction block
     const client = await dbPool.connect();
@@ -621,7 +774,7 @@ const assignComplaint = async (req, res) => {
       }
 
       let targetStatusId = complaint.status_id;
-      if (complaint.status_id === pendingId && assignedId && (finalDeptId || finalAssigneeId)) {
+      if ((complaint.status_id === pendingId || complaint.status_id === adminReviewId) && assignedId && (finalDeptId || finalAssigneeId)) {
         targetStatusId = assignedId;
       }
 
@@ -664,7 +817,11 @@ const assignComplaint = async (req, res) => {
           priority: complaint.priority
         }, assigneeUser).catch(err => console.error('Failed to dispatch assignment email:', err));
 
-        notifications.notifyComplaintAssigned(resultComplaint, finalAssigneeId).catch(err => console.error('Failed to trigger in-app assignment notification:', err));
+        try {
+          await notifications.notifyComplaintAssigned(resultComplaint, finalAssigneeId);
+        } catch (err) {
+          console.error('Failed to trigger in-app assignment notification:', err);
+        }
       }
     }
 
@@ -680,7 +837,8 @@ const assignComplaint = async (req, res) => {
 };
 
 /**
- * Claim an unassigned complaint in the agent's department (Self-assignment).
+ * Claim/Accept a complaint by the assigned Engineer.
+ * Transitions status: Assigned -> Accepted
  * PATCH /api/complaints/:id/claim
  */
 const claimComplaint = async (req, res) => {
@@ -697,10 +855,11 @@ const claimComplaint = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
     }
 
-    // Fetch complaint joining priorities
+    // Fetch complaint joining statuses and priorities
     const compCheck = await dbPool.query(`
-      SELECT c.*, cp.name AS priority
+      SELECT c.*, cs.name AS status_name, cp.name AS priority
       FROM complaints c
+      JOIN complaint_statuses cs ON c.status_id = cs.id
       LEFT JOIN complaint_priorities cp ON c.priority_id = cp.id
       WHERE c.id = $1
     `, [id]);
@@ -711,53 +870,55 @@ const claimComplaint = async (req, res) => {
 
     const complaint = compCheck.rows[0];
 
-    // Verify complaint is currently unassigned
-    if (complaint.assigned_to_id !== null) {
-      return res.status(400).json({ success: false, message: 'This ticket has already been assigned to another agent' });
+    // Validate that this engineer is the specific engineer assigned by ADMIN
+    if (complaint.assigned_to_id !== user.id) {
+      return res.status(403).json({ success: false, message: 'Forbidden: You are not the engineer assigned to this complaint' });
     }
 
-    // Fetch Assigned status id
-    const assignedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Assigned'");
-    const assignedStatusId = assignedStatusResult.rows[0]?.id;
-
-    // Transition from Pending to Assigned if status is Pending
-    const pendingStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Pending'");
-    const pendingStatusId = pendingStatusResult.rows[0]?.id;
-
-    let targetStatusId = complaint.status_id;
-    if (complaint.status_id === pendingStatusId && assignedStatusId) {
-      targetStatusId = assignedStatusId;
+    // Validate that ticket is awaiting claim (status Assigned)
+    if (complaint.status_name !== 'Assigned') {
+      return res.status(400).json({ success: false, message: `This ticket cannot be accepted from current status '${complaint.status_name}'` });
     }
 
-    // Update complaint
+    // Fetch Accepted status id
+    const acceptedResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Accepted'");
+    const acceptedId = acceptedResult.rows[0]?.id;
+
+    if (!acceptedId) {
+      return res.status(500).json({ success: false, message: 'Accepted status configuration is missing' });
+    }
+
+    // Update complaint status to Accepted
     const updateResult = await dbPool.query(`
       UPDATE complaints
-      SET assigned_to_id = $1, status_id = $2
-      WHERE id = $3
+      SET status_id = $1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
       RETURNING *
-    `, [user.id, targetStatusId, id]);
+    `, [acceptedId, id]);
 
-    // Log history
-    const auditRemark = 'Ticket claimed by agent';
+    // Log status history
+    const auditRemark = 'Complaint accepted by assigned engineer';
     await dbPool.query(`
       INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
       VALUES ($1, $2, $3, $4, $5)
-    `, [id, user.id, complaint.status_id, targetStatusId, auditRemark]);
+    `, [id, user.id, complaint.status_id, acceptedId, auditRemark]);
 
-    logger.audit('COMPLAINT_CLAIMED', { complaintId: id, ticketNumber: updateResult.rows[0].ticket_number }, user, req.ip);
+    logger.audit('COMPLAINT_ACCEPTED', { complaintId: id, ticketNumber: updateResult.rows[0].ticket_number }, user, req.ip);
 
+    // Send notifications
     const notifications = require('../utils/notifications');
-    notifications.notifyComplaintAssigned(updateResult.rows[0], user.id).catch(err => console.error('Failed to trigger claim assignment notification:', err));
+    notifications.notifyComplaintAccepted(complaint, `${user.first_name} ${user.last_name}`).catch(err => console.error(err));
 
     return res.status(200).json({
       success: true,
-      message: 'Ticket claimed successfully',
+      message: 'Complaint accepted successfully',
       data: updateResult.rows[0]
     });
 
   } catch (error) {
     console.error('Claim complaint error:', error.message);
-    return res.status(500).json({ success: false, message: 'Failed to claim complaint' });
+    return res.status(500).json({ success: false, message: 'Failed to accept complaint' });
   }
 };
 
@@ -767,7 +928,7 @@ const claimComplaint = async (req, res) => {
  */
 const updateComplaintStatus = async (req, res) => {
   const { id } = req.params;
-  const { status_id, remarks } = req.body;
+  const { status_id, remarks, hold_reason } = req.body;
   const user = req.user;
 
   if (!status_id) {
@@ -817,76 +978,69 @@ const updateComplaintStatus = async (req, res) => {
     const isCurrentPaused = ['On Hold', 'Waiting on Customer'].includes(current);
     const isTargetPaused = ['On Hold', 'Waiting on Customer'].includes(target);
 
-    // Terminal state protection: Closed complaints cannot be transitioned
-    if (current === 'Closed') {
-      return res.status(400).json({ success: false, message: 'Closed tickets cannot be modified' });
+    // Terminal state protection: Closed or Cancelled complaints cannot be transitioned
+    if (current === 'Closed' || current === 'Cancelled') {
+      return res.status(400).json({ success: false, message: `${current} tickets cannot be modified` });
+    }
+
+    // Validate hold reason if target is On Hold
+    const effectiveHoldReason = (hold_reason && hold_reason.trim()) || (remarks && remarks.trim());
+    if (target === 'On Hold') {
+      if (!effectiveHoldReason) {
+        return res.status(400).json({ success: false, message: 'A valid reason is required when putting a complaint on hold' });
+      }
     }
 
     // Role-specific transition matrix
     if (user.role === 'CUSTOMER') {
-      if (target === 'On Hold' || target === 'Waiting on Customer') {
-        return res.status(403).json({ success: false, message: 'Forbidden: Customers cannot pause ticket SLA' });
-      }
-      if (isCurrentPaused) {
-        return res.status(403).json({ success: false, message: 'Forbidden: Customers cannot transition tickets from paused states' });
-      }
-      if (target !== 'Closed') {
-        return res.status(403).json({ success: false, message: 'Customers are only permitted to transition tickets to Closed' });
-      }
-      if (current !== 'Resolved') {
-        return res.status(400).json({ success: false, message: 'Tickets can only be closed by customers once they are marked as Resolved' });
+      if (current === 'Pending' && target === 'Cancelled') {
+        // Customer cancelling own pending complaint
+      } else if (current === 'Resolved' && target === 'Closed') {
+        // Customer confirming resolution
+      } else {
+        return res.status(403).json({ success: false, message: `Forbidden: Customers cannot transition ticket from '${current}' to '${target}'` });
       }
     } else if (user.role === 'ENGINEER' || user.role === 'AGENT') {
       if (complaint.assigned_to_id !== user.id) {
         return res.status(403).json({ success: false, message: 'Forbidden: You can only update the status of tickets assigned to you' });
       }
 
-      if (isTargetPaused) {
-        // Pausing
-        if (!['In Progress', 'Assigned'].includes(current)) {
-          return res.status(400).json({ success: false, message: 'Tickets can only be placed on hold from In Progress or Assigned status' });
+      if (current === 'Assigned' && target === 'Accepted') {
+        // Engineer accepts complaint
+      } else if (current === 'Accepted' && target === 'In Progress') {
+        // Enforce that arrival at site has been recorded
+        const fcrCheck = await dbPool.query('SELECT reached_site_time FROM field_call_reports WHERE complaint_id = $1', [id]);
+        if (fcrCheck.rows.length === 0 || !fcrCheck.rows[0].reached_site_time) {
+          return res.status(400).json({
+            success: false,
+            message: "Cannot start work before recording arrival at site ('Reached Site')."
+          });
         }
-      } else if (isCurrentPaused) {
-        // Resuming
-        if (target !== 'In Progress') {
-          return res.status(400).json({ success: false, message: 'Agents can only resume tickets to In Progress status' });
-        }
+      } else if (['Accepted', 'In Progress'].includes(current) && target === 'On Hold') {
+        // Engineer places on hold (mandatory reason validated)
+      } else if (current === 'On Hold' && target === 'In Progress') {
+        // Engineer resumes work
       } else {
-        // Normal active transitions (e.g. Assigned -> In Progress)
-        if (target !== 'In Progress') {
-          return res.status(400).json({ success: false, message: 'Agents can only transition tickets to In Progress. Resolved status must be achieved via FCR submission.' });
-        }
-        if (current !== 'Assigned') {
-          return res.status(400).json({ success: false, message: 'Tickets can only be moved to In Progress from Assigned status' });
-        }
+        return res.status(400).json({ success: false, message: `Invalid status transition from '${current}' to '${target}' for Engineer` });
       }
     } else {
       // ADMIN or DEPT_HEAD manual transitions
-      if (isTargetPaused) {
-        if (!['In Progress', 'Assigned'].includes(current)) {
-          return res.status(400).json({ success: false, message: 'Tickets can only be placed on hold from In Progress or Assigned status' });
-        }
-      } else if (isCurrentPaused) {
-        if (target !== 'In Progress' && target !== 'Assigned') {
-          return res.status(400).json({ success: false, message: 'Paused tickets can only be resumed to In Progress or Assigned status' });
-        }
+      if (['Accepted', 'In Progress'].includes(current) && target === 'On Hold') {
+        // Allowed
+      } else if (current === 'On Hold' && target === 'In Progress') {
+        // Allowed
+      } else if (current === 'Pending' && target === 'Cancelled') {
+        // Allowed
+      } else if (current === 'Admin Review' && target === 'Assigned') {
+        // Allowed
+      } else if (current === 'Assigned' && target === 'Accepted') {
+        // Allowed
+      } else if (current === 'Accepted' && target === 'In Progress') {
+        // Allowed
+      } else if (current === 'Resolved' && target === 'Closed') {
+        // Allowed
       } else {
-        // Normal active transitions
-        if (target === 'Resolved') {
-          return res.status(400).json({ success: false, message: 'Manual transition to Resolved is blocked. Tickets must be resolved via FCR submission.' });
-        }
-        if (target === 'In Progress' && current !== 'Assigned') {
-          return res.status(400).json({ success: false, message: 'Tickets can only be moved to In Progress from Assigned status' });
-        }
-        if (target === 'Closed' && current !== 'Resolved') {
-          return res.status(400).json({ success: false, message: 'Tickets can only be closed from Resolved status' });
-        }
-        if (target === 'Pending') {
-          return res.status(400).json({ success: false, message: 'Cannot transition ticket back to Pending status' });
-        }
-        if (target === 'Assigned') {
-          return res.status(400).json({ success: false, message: 'Assigned status is automatically handled via assignment routing' });
-        }
+        return res.status(400).json({ success: false, message: `Invalid status transition from '${current}' to '${target}'` });
       }
     }
 
@@ -905,12 +1059,13 @@ const updateComplaintStatus = async (req, res) => {
         updateQuery = `
           UPDATE complaints
           SET status_id = $1,
+              hold_reason = $2,
               paused_at = COALESCE(paused_at, CURRENT_TIMESTAMP),
               updated_at = CURRENT_TIMESTAMP
-          WHERE id = $2
+          WHERE id = $3
           RETURNING *
         `;
-        queryParams = [status_id, id];
+        queryParams = [status_id, effectiveHoldReason, id];
       } else if (isCurrentPaused && !isTargetPaused) {
         // Transitioning FROM paused status to active status
         updateQuery = `
@@ -939,19 +1094,49 @@ const updateComplaintStatus = async (req, res) => {
       const updateResult = await client.query(updateQuery, queryParams);
       resultComplaint = updateResult.rows[0];
 
+      // Update work_start_time in field_call_reports if transitioning Accepted -> In Progress
+      if (target === 'In Progress' && current === 'Accepted') {
+        await client.query(`
+          UPDATE field_call_reports
+          SET work_start_time = COALESCE(work_start_time, CURRENT_TIMESTAMP),
+              updated_at = CURRENT_TIMESTAMP
+          WHERE complaint_id = $1
+        `, [id]);
+      }
+
       // Log in status history audit
-      const defaultRemarks = `Status changed from '${complaint.current_status_name}' to '${targetStatus.name}'`;
+      let historyRemark = remarks ? remarks.trim() : `Status changed from '${complaint.current_status_name}' to '${targetStatus.name}'`;
+      if (target === 'On Hold') {
+        historyRemark = effectiveHoldReason;
+      } else if (target === 'In Progress' && current === 'Accepted') {
+        historyRemark = 'Engineer started active work';
+      }
+
       await client.query(`
         INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
         VALUES ($1, $2, $3, $4, $5)
-      `, [id, user.id, complaint.status_id, status_id, remarks ? remarks.trim() : defaultRemarks]);
+      `, [id, user.id, complaint.status_id, status_id, historyRemark]);
 
       await client.query('COMMIT');
       client.release();
 
+      if (target === 'In Progress' && current === 'Accepted') {
+        logger.audit('WORK_STARTED', { complaintId: id, ticketNumber: complaint.ticket_number }, user, req.ip);
+      }
+
       const notifications = require('../utils/notifications');
       notifications.notifyStatusChanged(complaint, complaint.current_status_name, targetStatus.name)
         .catch(err => console.error('Failed to trigger status change notification:', err));
+
+      if (target === 'On Hold') {
+        notifications.notifyComplaintOnHold(complaint, effectiveHoldReason).catch(err => console.error(err));
+      } else if (target === 'In Progress' && current === 'Accepted') {
+        notifications.notifyWorkStarted(complaint).catch(err => console.error(err));
+      } else if (target === 'In Progress' && isCurrentPaused) {
+        notifications.notifyComplaintResumed(complaint).catch(err => console.error(err));
+      } else if (target === 'Accepted') {
+        notifications.notifyComplaintAccepted(complaint, `${user.first_name} ${user.last_name}`).catch(err => console.error(err));
+      }
 
       // Send resolution notification to creator if new status is Resolved
       if (targetStatus.name === 'Resolved') {
@@ -1016,6 +1201,11 @@ const addComment = async (req, res) => {
     // Enforce access control
     if (!verifyComplaintAccess(user, complaint)) {
       return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to comment on this complaint' });
+    }
+
+    // Engineers must claim ticket before posting comments
+    if ((user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.current_status_name === 'Assigned') {
+      return res.status(400).json({ success: false, message: 'Please claim the ticket before posting comments' });
     }
 
     // Customers cannot post internal comments
@@ -1162,7 +1352,7 @@ const exportComplaints = async (req, res) => {
              u_assignee.first_name AS assignee_first_name, u_assignee.last_name AS assignee_last_name
       FROM complaints c
       JOIN users u_creator ON c.created_by_id = u_creator.id
-      JOIN complaint_categories cc ON c.category_id = cc.id
+      LEFT JOIN complaint_categories cc ON c.category_id = cc.id
       JOIN complaint_statuses cs ON c.status_id = cs.id
       JOIN complaint_priorities cp ON c.priority_id = cp.id
       LEFT JOIN departments dept ON c.department_id = dept.id
@@ -1217,11 +1407,157 @@ const exportComplaints = async (req, res) => {
 };
 
 /**
- * Delete a complaint (Customer can only delete own initial Pending complaint).
+ * Reopen a resolved complaint.
+ * 2-Step Atomic Transition: Resolved -> Reopened -> Admin Review
+ * POST /api/complaints/:id/reopen
+ */
+const reopenComplaint = async (req, res) => {
+  const { id } = req.params;
+  const reasonText = (req.body?.reason || req.body?.reopen_reason || '').trim();
+  const user = req.user;
+
+  if (!reasonText) {
+    return res.status(400).json({
+      success: false,
+      message: 'A detailed reason is required when reopening a complaint'
+    });
+  }
+
+  const reason = reasonText;
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    // Fetch complaint and current status
+    const compCheck = await dbPool.query(`
+      SELECT c.*, cs.name AS status_name
+      FROM complaints c
+      JOIN complaint_statuses cs ON c.status_id = cs.id
+      WHERE c.id = $1
+    `, [id]);
+
+    if (compCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
+
+    const complaint = compCheck.rows[0];
+
+    // Authorization: Only ticket creator (Customer) or Admin can reopen
+    if (user.role === 'CUSTOMER' && complaint.created_by_id !== user.id) {
+      return res.status(403).json({ success: false, message: 'Forbidden: You can only reopen your own complaints' });
+    }
+    if (user.role !== 'CUSTOMER' && user.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Forbidden: Only customers or administrators can reopen complaints' });
+    }
+
+    // Check status: Must be 'Resolved'
+    if (complaint.status_name !== 'Resolved') {
+      return res.status(400).json({
+        success: false,
+        message: `Only Resolved complaints can be reopened. Current status: ${complaint.status_name}`
+      });
+    }
+
+    // Fetch status IDs for Resolved, Reopened, Admin Review
+    const statusesRes = await dbPool.query(
+      "SELECT id, name FROM complaint_statuses WHERE name IN ('Resolved', 'Reopened', 'Admin Review')"
+    );
+    const statusMap = {};
+    statusesRes.rows.forEach(r => { statusMap[r.name] = r.id; });
+
+    const resolvedId = statusMap['Resolved'] || complaint.status_id;
+    const reopenedId = statusMap['Reopened'];
+    const adminReviewId = statusMap['Admin Review'];
+
+    if (!reopenedId || !adminReviewId) {
+      return res.status(500).json({ success: false, message: 'Required status configuration (Reopened / Admin Review) is missing' });
+    }
+
+    const trimmedReason = reason.trim();
+    const customerName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+
+    // Execute atomic 2-step status transition inside a transaction
+    const client = await dbPool.connect();
+    let updatedComplaint = null;
+
+    try {
+      await client.query('BEGIN');
+
+      // Step 1: Record status history entry for Resolved -> Reopened
+      await client.query(`
+        INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [id, user.id, resolvedId, reopenedId, trimmedReason]);
+
+      // Step 2: Record status history entry for Reopened -> Admin Review
+      const automatedRemark = 'Automated workflow: Queued for Administrative Review and reassignment';
+      await client.query(`
+        INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [id, user.id, reopenedId, adminReviewId, automatedRemark]);
+
+      // Step 3: Update complaints table to Admin Review with reopen_reason
+      const updateRes = await client.query(`
+        UPDATE complaints
+        SET status_id = $1,
+            reopen_reason = $2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $3
+        RETURNING *
+      `, [adminReviewId, trimmedReason, id]);
+
+      updatedComplaint = updateRes.rows[0];
+
+      // Step 4: Reopen FCR report to Draft so engineer can re-visit and submit updated service report
+      await client.query(`
+        UPDATE field_call_reports
+        SET status = 'Draft',
+            travel_start_time = NULL,
+            reached_site_time = NULL,
+            work_close_time = NULL,
+            reminder_24h_sent_at = NULL,
+            reminder_48h_sent_at = NULL,
+            auto_closed_at = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE complaint_id = $1
+      `, [id]);
+
+      await client.query('COMMIT');
+      client.release();
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      client.release();
+      throw txErr;
+    }
+
+    logger.audit('COMPLAINT_REOPENED', { complaintId: id, ticketNumber: complaint.ticket_number, reason: trimmedReason }, user, req.ip);
+
+    // Notify admins
+    const notifications = require('../utils/notifications');
+    notifications.notifyComplaintReopened(complaint, trimmedReason, customerName)
+      .catch(err => console.error('Failed to notify complaint reopened:', err));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Complaint reopened and queued for Admin Review',
+      data: updatedComplaint
+    });
+
+  } catch (error) {
+    console.error('Reopen complaint error:', error.message);
+    return res.status(500).json({ success: false, message: 'Failed to reopen complaint' });
+  }
+};
+
+/**
+ * Cancel a complaint (Non-destructive cancellation).
  * DELETE /api/complaints/:id
  */
 const deleteComplaint = async (req, res) => {
   const { id } = req.params;
+  const { reason } = req.body || {};
   const user = req.user;
 
   try {
@@ -1246,63 +1582,415 @@ const deleteComplaint = async (req, res) => {
     // Authorization checks
     if (user.role === 'CUSTOMER') {
       if (complaint.created_by_id !== user.id) {
-        return res.status(403).json({ success: false, message: 'Forbidden: You can only delete your own complaints' });
+        return res.status(403).json({ success: false, message: 'Forbidden: You can only cancel your own complaints' });
       }
 
       // Check status: ONLY allowed if status is 'Pending'
       if (complaint.status_name !== 'Pending') {
         return res.status(400).json({
           success: false,
-          message: `Cannot delete complaint once it has entered active processing (Status: ${complaint.status_name})`
+          message: `Cannot cancel complaint once it has entered active processing (Status: ${complaint.status_name})`
         });
       }
     } else if (user.role === 'ADMIN') {
-      // ADMIN is allowed to delete
+      // ADMIN is allowed to cancel
     } else {
-      // ENGINEER / other roles cannot delete complaints
-      return res.status(403).json({ success: false, message: 'Forbidden: Only customer (for own pending complaints) or admin can delete complaints' });
+      // ENGINEER / other roles cannot cancel complaints
+      return res.status(403).json({ success: false, message: 'Forbidden: Only customer (for own pending complaints) or admin can cancel complaints' });
     }
 
-    // Fetch any attachment file paths to delete from storage backend
-    const attachmentsRes = await dbPool.query('SELECT file_path FROM complaint_attachments WHERE complaint_id = $1', [id]);
-    const filePaths = attachmentsRes.rows.map(r => r.file_path);
+    // Fetch Cancelled status ID
+    const cancelledRes = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Cancelled'");
+    const cancelledId = cancelledRes.rows[0]?.id;
 
-    // Delete complaint atomically in a transaction (cascades to comments, status history, attachments, fcr, feedback)
+    if (!cancelledId) {
+      return res.status(500).json({ success: false, message: 'Cancelled status configuration is missing' });
+    }
+
+    const cancelReason = (reason && reason.trim()) || (user.role === 'CUSTOMER' ? 'Cancelled by customer' : 'Cancelled by administrator');
+
+    // Non-destructive transition: Update status to Cancelled and record in history (preserves all rows and attachments)
     const client = await dbPool.connect();
+    let updatedComplaint = null;
+
     try {
       await client.query('BEGIN');
-      await client.query('DELETE FROM complaints WHERE id = $1', [id]);
+
+      const updateRes = await client.query(`
+        UPDATE complaints
+        SET status_id = $1,
+            cancellation_reason = $2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $3
+        RETURNING *
+      `, [cancelledId, cancelReason, id]);
+
+      updatedComplaint = updateRes.rows[0];
+
+      await client.query(`
+        INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [id, user.id, complaint.status_id, cancelledId, cancelReason]);
+
       await client.query('COMMIT');
-    } catch (txError) {
-      await client.query('ROLLBACK');
-      throw txError;
-    } finally {
       client.release();
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      client.release();
+      throw txErr;
     }
 
-    // Clean up files in storage
-    const storage = require('../utils/storage');
-    for (const filePath of filePaths) {
-      try {
-        await storage.deleteFile(filePath);
-      } catch (storageErr) {
-        console.error('Storage file deletion error during complaint deletion:', storageErr.message);
-      }
-    }
+    logger.audit('COMPLAINT_CANCELLED', { complaintId: id, ticketNumber: complaint.ticket_number, reason: cancelReason }, user, req.ip);
 
-    logger.audit('COMPLAINT_DELETED', { complaintId: id, ticketNumber: complaint.ticket_number }, user, req.ip);
+    const notifications = require('../utils/notifications');
+    notifications.notifyComplaintCancelled(complaint, cancelReason).catch(err => console.error(err));
 
     return res.status(200).json({
       success: true,
-      message: 'Complaint deleted successfully'
+      message: 'Complaint cancelled successfully',
+      data: updatedComplaint
     });
 
   } catch (error) {
-    console.error('Delete complaint error:', error.message);
+    console.error('Cancel complaint error:', error.message);
     return res.status(500).json({
       success: false,
-      message: 'Failed to delete complaint'
+      message: 'Failed to cancel complaint'
     });
+  }
+};
+
+/**
+ * Request ticket reassignment (Assigned Engineer ONLY)
+ * POST /api/complaints/:id/reassignment/request
+ */
+const requestReassignment = async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  const user = req.user;
+
+  if (!reason || !reason.trim()) {
+    return res.status(400).json({ success: false, message: 'Reassignment reason is mandatory' });
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    const compCheck = await dbPool.query('SELECT * FROM complaints WHERE id = $1', [id]);
+    if (compCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
+
+    const complaint = compCheck.rows[0];
+
+    // Authorization: Assigned Engineer ONLY
+    if (user.role !== 'ENGINEER' && user.role !== 'AGENT') {
+      return res.status(403).json({ success: false, message: 'Forbidden: Only engineers can request reassignment' });
+    }
+    if (complaint.assigned_to_id !== user.id) {
+      return res.status(403).json({ success: false, message: 'Forbidden: You can only request reassignment for tickets currently assigned to you' });
+    }
+
+    // Check if there is already a PENDING request for this complaint
+    const pendingCheck = await dbPool.query(
+      "SELECT id FROM complaint_reassignment_requests WHERE complaint_id = $1 AND status = 'PENDING'",
+      [id]
+    );
+    if (pendingCheck.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'A reassignment request is already pending for this complaint'
+      });
+    }
+
+    const insertRes = await dbPool.query(`
+      INSERT INTO complaint_reassignment_requests (
+        complaint_id, requested_by_id, assigned_engineer_id, reason, status
+      )
+      VALUES ($1, $2, $3, $4, 'PENDING')
+      RETURNING *
+    `, [id, user.id, user.id, reason.trim()]);
+
+    logger.audit('REASSIGNMENT_REQUESTED', {
+      complaintId: id,
+      ticketNumber: complaint.ticket_number,
+      requestId: insertRes.rows[0].id,
+      reason: reason.trim()
+    }, user, req.ip);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Reassignment request submitted successfully and queued for administrative review',
+      data: insertRes.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Request reassignment error:', error.message);
+    return res.status(500).json({ success: false, message: `Failed to request reassignment: ${error.message}` });
+  }
+};
+
+/**
+ * Reject ticket reassignment request (Admin / Dept Head ONLY)
+ * POST /api/complaints/:id/reassignment/reject
+ */
+const rejectReassignment = async (req, res) => {
+  const { id } = req.params;
+  const { request_id, decision_reason } = req.body;
+  const user = req.user;
+
+  if (user.role !== 'ADMIN' && user.role !== 'DEPT_HEAD') {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient privileges to reject reassignment requests' });
+  }
+
+  if (!decision_reason || !decision_reason.trim()) {
+    return res.status(400).json({ success: false, message: 'Rejection decision reason is mandatory' });
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    let reqCheck;
+    if (request_id) {
+      reqCheck = await dbPool.query(
+        'SELECT * FROM complaint_reassignment_requests WHERE id = $1 AND complaint_id = $2',
+        [request_id, id]
+      );
+    } else {
+      reqCheck = await dbPool.query(
+        "SELECT * FROM complaint_reassignment_requests WHERE complaint_id = $1 AND status = 'PENDING' ORDER BY requested_at DESC LIMIT 1",
+        [id]
+      );
+    }
+
+    if (reqCheck.rows.length === 0 || reqCheck.rows[0].status !== 'PENDING') {
+      return res.status(400).json({ success: false, message: 'No pending reassignment request found for this complaint' });
+    }
+
+    const reassignReq = reqCheck.rows[0];
+
+    const updateRes = await dbPool.query(`
+      UPDATE complaint_reassignment_requests
+      SET status = 'REJECTED',
+          decided_by_id = $1,
+          decision_reason = $2,
+          decided_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      RETURNING *
+    `, [user.id, decision_reason.trim(), reassignReq.id]);
+
+    logger.audit('REASSIGNMENT_REJECTED', {
+      complaintId: id,
+      requestId: reassignReq.id,
+      decisionReason: decision_reason.trim()
+    }, user, req.ip);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Reassignment request rejected successfully',
+      data: updateRes.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Reject reassignment error:', error.message);
+    return res.status(500).json({ success: false, message: `Failed to reject reassignment request: ${error.message}` });
+  }
+};
+
+/**
+ * Approve ticket reassignment and assign new engineer (Admin / Dept Head ONLY)
+ * POST /api/complaints/:id/reassignment/approve
+ */
+const approveReassignment = async (req, res) => {
+  const { id } = req.params;
+  const { request_id, new_engineer_id, decision_reason } = req.body;
+  const user = req.user;
+
+  if (user.role !== 'ADMIN' && user.role !== 'DEPT_HEAD') {
+    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient privileges to approve reassignment requests' });
+  }
+
+  if (!new_engineer_id) {
+    return res.status(400).json({ success: false, message: 'New engineer ID is mandatory for approval' });
+  }
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    // 1. Fetch complaint
+    const compCheck = await dbPool.query(`
+      SELECT c.*, cp.name AS priority
+      FROM complaints c
+      LEFT JOIN complaint_priorities cp ON c.priority_id = cp.id
+      WHERE c.id = $1
+    `, [id]);
+
+    if (compCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
+
+    const complaint = compCheck.rows[0];
+
+    // 2. Fetch pending request
+    let reqCheck;
+    if (request_id) {
+      reqCheck = await dbPool.query(
+        'SELECT * FROM complaint_reassignment_requests WHERE id = $1 AND complaint_id = $2',
+        [request_id, id]
+      );
+    } else {
+      reqCheck = await dbPool.query(
+        "SELECT * FROM complaint_reassignment_requests WHERE complaint_id = $1 AND status = 'PENDING' ORDER BY requested_at DESC LIMIT 1",
+        [id]
+      );
+    }
+
+    if (reqCheck.rows.length === 0 || reqCheck.rows[0].status !== 'PENDING') {
+      return res.status(400).json({ success: false, message: 'No pending reassignment request found for this complaint' });
+    }
+
+    const reassignReq = reqCheck.rows[0];
+
+    // Stale check (Correction 2): Verify request.assigned_engineer_id matches the complaint's current assigned engineer
+    if (reassignReq.assigned_engineer_id !== complaint.assigned_to_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot approve request: The complaint's assigned engineer has changed since this request was submitted"
+      });
+    }
+
+    // Validate new engineer
+    const engCheck = await dbPool.query(`
+      SELECT u.id, r.name AS role, u.first_name, u.last_name, u.email
+      FROM users u
+      JOIN roles r ON u.role_id = r.id
+      WHERE u.id = $1 AND u.is_active = true
+    `, [new_engineer_id]);
+
+    if (engCheck.rows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Invalid new_engineer_id: user does not exist or is inactive' });
+    }
+
+    const targetAgent = engCheck.rows[0];
+    if (targetAgent.role !== 'ENGINEER' && targetAgent.role !== 'AGENT' && targetAgent.role !== 'DEPT_HEAD') {
+      return res.status(400).json({ success: false, message: 'Complaints can only be assigned to engineers' });
+    }
+
+    // Fetch Assigned status
+    const assignedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Assigned'");
+    const assignedStatusId = assignedStatusResult.rows[0]?.id;
+
+    const client = await dbPool.connect();
+    let updatedComplaint = null;
+
+    try {
+      await client.query('BEGIN');
+
+      // Update complaint assignment
+      const compUpdateRes = await client.query(`
+        UPDATE complaints
+        SET assigned_to_id = $1,
+            status_id = $2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $3
+        RETURNING *
+      `, [new_engineer_id, assignedStatusId, id]);
+      updatedComplaint = compUpdateRes.rows[0];
+
+      // Update reassignment request to APPROVED
+      await client.query(`
+        UPDATE complaint_reassignment_requests
+        SET status = 'APPROVED',
+            new_engineer_id = $1,
+            decided_by_id = $2,
+            decision_reason = $3,
+            decided_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+      `, [new_engineer_id, user.id, decision_reason ? decision_reason.trim() : 'Approved by administrator', reassignReq.id]);
+
+      // Record in complaint_status_history
+      const historyRemark = `Reassignment approved by ${user.first_name || 'Admin'}: Assigned to ${targetAgent.first_name} ${targetAgent.last_name}`;
+      await client.query(`
+        INSERT INTO complaint_status_history (complaint_id, changed_by_id, old_status_id, new_status_id, remarks)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [id, user.id, complaint.status_id, assignedStatusId, historyRemark]);
+
+      await client.query('COMMIT');
+      client.release();
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      client.release();
+      throw txErr;
+    }
+
+    logger.audit('REASSIGNMENT_APPROVED', {
+      complaintId: id,
+      requestId: reassignReq.id,
+      oldEngineerId: reassignReq.assigned_engineer_id,
+      newEngineerId: new_engineer_id
+    }, user, req.ip);
+
+    // Notify new engineer
+    const notifications = require('../utils/notifications');
+    notifications.sendAssignmentNotification({
+      ticket_number: updatedComplaint.ticket_number,
+      title: updatedComplaint.title,
+      priority: complaint.priority
+    }, targetAgent).catch(err => console.error(err));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Reassignment request approved and ticket assigned to new engineer',
+      data: updatedComplaint
+    });
+
+  } catch (error) {
+    console.error('Approve reassignment error:', error.message);
+    return res.status(500).json({ success: false, message: `Failed to approve reassignment: ${error.message}` });
+  }
+};
+
+/**
+ * Get all reassignment requests history for a complaint
+ * GET /api/complaints/:id/reassignment/requests
+ */
+const getReassignmentRequests = async (req, res) => {
+  const { id } = req.params;
+  const user = req.user;
+
+  try {
+    if (!dbPool) {
+      return res.status(500).json({ success: false, message: 'Database connection is unavailable' });
+    }
+
+    const reassignRes = await dbPool.query(`
+      SELECT crr.*, 
+             u_req.first_name AS requester_first_name, u_req.last_name AS requester_last_name,
+             u_eng.first_name AS engineer_first_name, u_eng.last_name AS engineer_last_name,
+             u_new.first_name AS new_engineer_first_name, u_new.last_name AS new_engineer_last_name,
+             u_dec.first_name AS decider_first_name, u_dec.last_name AS decider_last_name
+      FROM complaint_reassignment_requests crr
+      LEFT JOIN users u_req ON crr.requested_by_id = u_req.id
+      LEFT JOIN users u_eng ON crr.assigned_engineer_id = u_eng.id
+      LEFT JOIN users u_new ON crr.new_engineer_id = u_new.id
+      LEFT JOIN users u_dec ON crr.decided_by_id = u_dec.id
+      WHERE crr.complaint_id = $1
+      ORDER BY crr.requested_at DESC
+    `, [id]);
+
+    return res.status(200).json({
+      success: true,
+      data: reassignRes.rows
+    });
+  } catch (error) {
+    console.error('Get reassignment requests error:', error.message);
+    return res.status(500).json({ success: false, message: `Failed to retrieve reassignment history: ${error.message}` });
   }
 };
 
@@ -1314,7 +2002,12 @@ module.exports = {
   assignComplaint,
   claimComplaint,
   updateComplaintStatus,
+  reopenComplaint,
   addComment,
   exportComplaints,
   deleteComplaint,
+  requestReassignment,
+  rejectReassignment,
+  approveReassignment,
+  getReassignmentRequests
 };

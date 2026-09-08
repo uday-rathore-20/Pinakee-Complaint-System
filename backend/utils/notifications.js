@@ -107,15 +107,20 @@ PINakee Support Team`;
   /**
    * Create an in-app notification entry.
    */
-  async createNotification(userId, complaintId, type, title, message) {
+  async createNotification(userId, complaintId, type, title, message, txClient = null) {
     const dbPool = require('../config/db');
-    if (!dbPool) return;
+    if (!dbPool && !txClient) return null;
     try {
-      const res = await dbPool.query(`
+      const queryText = `
         INSERT INTO in_app_notifications (user_id, complaint_id, type, title, message)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING *
-      `, [userId, complaintId || null, type, title, message]);
+      `;
+      const queryParams = [userId, complaintId || null, type, title, message];
+
+      const res = txClient 
+        ? await txClient.query(queryText, queryParams)
+        : await dbPool.query(queryText, queryParams);
 
       const notification = res.rows[0];
 
@@ -124,10 +129,106 @@ PINakee Support Team`;
         const { emitNotificationNew } = require('./socket');
         emitNotificationNew(userId, notification);
       } catch (socketErr) {
-        console.error('Socket notification emission failed:', socketErr.message);
+        // Socket emission non-blocking warning
       }
+
+      return notification;
     } catch (err) {
       console.error('Failed to create in-app notification:', err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Send 24-hour resolution confirmation reminder to ticket creator.
+   */
+  async sendResolutionReminder24h(complaint, creator, txClient = null) {
+    if (!creator || !creator.id) return;
+
+    await this.createNotification(
+      creator.id,
+      complaint.id,
+      'SLA_REMINDER_24H',
+      'Resolution Confirmation Reminder',
+      `Your complaint #${complaint.ticket_number} ("${complaint.title}") was marked as Resolved 24 hours ago. Please review and confirm resolution or reopen if needed.`,
+      txClient
+    );
+
+    if (creator.email) {
+      const subject = `[PINakee] Reminder: Please Confirm Resolution for Ticket #${complaint.ticket_number}`;
+      const body = `Dear ${creator.first_name || 'Valued Customer'} ${creator.last_name || ''},
+
+Your service complaint ticket #${complaint.ticket_number} ("${complaint.title}") was marked as RESOLVED by our field engineering team 24 hours ago.
+
+Please log in to the PINakee portal to:
+1. Confirm the resolution and rate the service experience, OR
+2. Reopen the complaint if the issue persists.
+
+Note: Tickets with no customer response are automatically closed 72 hours after service resolution.
+
+Best regards,
+PINakee Customer Support`;
+      await this.logEmail(creator.email, subject, body, txClient);
+    }
+  }
+
+  /**
+   * Send 48-hour resolution confirmation reminder to ticket creator.
+   */
+  async sendResolutionReminder48h(complaint, creator, txClient = null) {
+    if (!creator || !creator.id) return;
+
+    await this.createNotification(
+      creator.id,
+      complaint.id,
+      'SLA_REMINDER_48H',
+      'Second Reminder: Confirm Service Resolution',
+      `Second Reminder: Complaint #${complaint.ticket_number} is awaiting confirmation and will automatically close in 24 hours if no action is taken.`,
+      txClient
+    );
+
+    if (creator.email) {
+      const subject = `[PINakee] [URGENT] Second Reminder: Ticket #${complaint.ticket_number} will auto-close in 24 hours`;
+      const body = `Dear ${creator.first_name || 'Valued Customer'} ${creator.last_name || ''},
+
+This is a second reminder regarding your complaint ticket #${complaint.ticket_number} ("${complaint.title}").
+
+Our engineering team completed service resolution 48 hours ago. Please confirm whether the issue is resolved to your satisfaction.
+
+If no response or reopen is received within the next 24 hours, this ticket will be automatically closed by the system.
+
+Best regards,
+PINakee Customer Support`;
+      await this.logEmail(creator.email, subject, body, txClient);
+    }
+  }
+
+  /**
+   * Notify customer when a complaint is automatically closed by the system after 72 hours.
+   */
+  async notifyAutoClosed(complaint, creator, txClient = null) {
+    if (!creator || !creator.id) return;
+
+    await this.createNotification(
+      creator.id,
+      complaint.id,
+      'STATUS_CLOSED',
+      'Complaint Auto-Closed',
+      `Your complaint #${complaint.ticket_number} ("${complaint.title}") has been automatically closed after 72 hours of customer inactivity following service resolution.`,
+      txClient
+    );
+
+    if (creator.email) {
+      const subject = `[PINakee] Ticket Auto-Closed: #${complaint.ticket_number}`;
+      const body = `Dear ${creator.first_name || 'Valued Customer'} ${creator.last_name || ''},
+
+Your complaint ticket #${complaint.ticket_number} ("${complaint.title}") has been automatically closed after 72 hours without response following resolution.
+
+Thank you for choosing PINakee Service Management. If you require further assistance, you may log a new service complaint at any time.
+
+Best regards,
+PINakee Support Team`;
+      await this.logEmail(creator.email, subject, body, txClient);
     }
   }
 
@@ -138,7 +239,7 @@ PINakee Support Team`;
     const dbPool = require('../config/db');
     if (!dbPool) return;
     try {
-      const adminsResult = await dbPool.query("SELECT id FROM users WHERE role_id = 1 AND is_active = true");
+      const adminsResult = await dbPool.query("SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.name = 'ADMIN' AND u.is_active = true");
       for (const admin of adminsResult.rows) {
         await this.createNotification(
           admin.id,
@@ -162,8 +263,8 @@ PINakee Support Team`;
       assigneeId,
       complaint.id,
       'COMPLAINT_ASSIGNED',
-      'Complaint Assigned',
-      `You have been assigned to complaint #${complaint.ticket_number} ("${complaint.title}").`
+      'Complaint Assigned - Claim Required',
+      `New complaint #${complaint.ticket_number} ("${complaint.title}") assigned to you. Please claim the ticket to begin work.`
     );
   }
 
@@ -338,6 +439,169 @@ PINakee SLA Escalation Monitor`;
       }
     } catch (err) {
       console.error('Failed to notify SLA breached:', err.message);
+    }
+  }
+
+  /**
+   * Notify Customer and Admins when Engineer accepts the complaint.
+   */
+  async notifyComplaintAccepted(complaint, engineerName) {
+    const dbPool = require('../config/db');
+    if (!dbPool) return;
+    try {
+      // Notify customer
+      await this.createNotification(
+        complaint.created_by_id,
+        complaint.id,
+        'COMPLAINT_ACCEPTED',
+        'Service Ticket Accepted',
+        `Engineer ${engineerName || 'assigned'} has accepted your complaint #${complaint.ticket_number}.`
+      );
+
+      // Notify admins
+      const adminRes = await dbPool.query(
+        'SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.name = \'ADMIN\' AND u.is_active = true'
+      );
+      for (const a of adminRes.rows) {
+        await this.createNotification(
+          a.id,
+          complaint.id,
+          'COMPLAINT_ACCEPTED',
+          'Engineer Accepted Complaint',
+          `Engineer ${engineerName || ''} accepted ticket #${complaint.ticket_number}.`
+        );
+      }
+    } catch (err) {
+      console.error('Failed to notify complaint accepted:', err.message);
+    }
+  }
+
+  /**
+   * Notify Customer when work begins (In Progress).
+   */
+  async notifyWorkStarted(complaint) {
+    try {
+      await this.createNotification(
+        complaint.created_by_id,
+        complaint.id,
+        'WORK_STARTED',
+        'Work In Progress',
+        `Engineer has commenced active work on complaint #${complaint.ticket_number}.`
+      );
+    } catch (err) {
+      console.error('Failed to notify work started:', err.message);
+    }
+  }
+
+  /**
+   * Notify Customer and Admins when complaint is put on hold.
+   */
+  async notifyComplaintOnHold(complaint, reason) {
+    const dbPool = require('../config/db');
+    if (!dbPool) return;
+    try {
+      await this.createNotification(
+        complaint.created_by_id,
+        complaint.id,
+        'COMPLAINT_ON_HOLD',
+        'Complaint Placed On Hold',
+        `Complaint #${complaint.ticket_number} is on hold. Reason: ${reason}`
+      );
+
+      const adminRes = await dbPool.query(
+        'SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.name = \'ADMIN\' AND u.is_active = true'
+      );
+      for (const a of adminRes.rows) {
+        await this.createNotification(
+          a.id,
+          complaint.id,
+          'COMPLAINT_ON_HOLD',
+          'Complaint Placed On Hold',
+          `Ticket #${complaint.ticket_number} was placed on hold. Reason: ${reason}`
+        );
+      }
+    } catch (err) {
+      console.error('Failed to notify complaint on hold:', err.message);
+    }
+  }
+
+  /**
+   * Notify Customer when complaint is resumed.
+   */
+  async notifyComplaintResumed(complaint) {
+    try {
+      await this.createNotification(
+        complaint.created_by_id,
+        complaint.id,
+        'COMPLAINT_RESUMED',
+        'Complaint Resumed',
+        `Work has resumed on complaint #${complaint.ticket_number}.`
+      );
+    } catch (err) {
+      console.error('Failed to notify complaint resumed:', err.message);
+    }
+  }
+
+  /**
+   * Notify Admins when Customer reopens a complaint.
+   */
+  async notifyComplaintReopened(complaint, reason, customerName) {
+    const dbPool = require('../config/db');
+    if (!dbPool) return;
+    try {
+      const adminRes = await dbPool.query(
+        'SELECT u.id, u.first_name, u.last_name, u.email FROM users u JOIN roles r ON u.role_id = r.id WHERE r.name = \'ADMIN\' AND u.is_active = true'
+      );
+      for (const admin of adminRes.rows) {
+        await this.createNotification(
+          admin.id,
+          complaint.id,
+          'COMPLAINT_REOPENED',
+          'Customer Reopened Complaint — Admin Review Required',
+          `Customer ${customerName || ''} reopened ticket #${complaint.ticket_number}. Reason: "${reason}"`
+        );
+
+        // Queue email notification
+        const subject = `[PINakee] [ACTION REQUIRED] Customer Reopened Ticket #${complaint.ticket_number}`;
+        const body = `Dear ${admin.first_name} ${admin.last_name},
+
+Customer ${customerName || 'The customer'} has rejected the resolution for complaint #${complaint.ticket_number} and reopened the ticket.
+
+Customer Reason / Remarks:
+"${reason}"
+
+The ticket has been placed in "Admin Review". Please review the complaint history and assign an engineer.
+
+Best regards,
+PINakee Service Dispatcher`;
+        await this.logEmail(admin.email, subject, body);
+      }
+    } catch (err) {
+      console.error('Failed to notify complaint reopened:', err.message);
+    }
+  }
+
+  /**
+   * Notify Admins and Engineer when a complaint is cancelled.
+   */
+  async notifyComplaintCancelled(complaint, reason) {
+    const dbPool = require('../config/db');
+    if (!dbPool) return;
+    try {
+      const adminRes = await dbPool.query(
+        'SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.name = \'ADMIN\' AND u.is_active = true'
+      );
+      for (const a of adminRes.rows) {
+        await this.createNotification(
+          a.id,
+          complaint.id,
+          'COMPLAINT_CANCELLED',
+          'Complaint Cancelled',
+          `Ticket #${complaint.ticket_number} was cancelled. ${reason ? `Reason: ${reason}` : ''}`
+        );
+      }
+    } catch (err) {
+      console.error('Failed to notify complaint cancelled:', err.message);
     }
   }
 }

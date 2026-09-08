@@ -8,10 +8,7 @@ const { validateFileSignature } = require('../utils/fileValidator');
 const verifyComplaintAccess = (user, complaint) => {
   if (user.role === 'ADMIN') return true;
   if (user.role === 'ENGINEER' || user.role === 'AGENT') {
-    if (complaint.assigned_to_id === user.id) return true;
-    if (complaint.assigned_to_id === null) {
-      if (!complaint.department_id || !user.department_id || complaint.department_id === user.department_id) return true;
-    }
+    return complaint.assigned_to_id === user.id;
   }
   if (user.role === 'DEPT_HEAD' && complaint.department_id === user.department_id) return true;
   if (user.role === 'CUSTOMER' && complaint.created_by_id === user.id) return true;
@@ -47,6 +44,13 @@ const uploadAttachment = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to attach files to this complaint' });
     }
 
+    // Engineers must claim ticket before uploading attachments
+    const assignedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Assigned'");
+    const assignedId = assignedStatusResult.rows[0]?.id;
+    if ((user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.status_id === assignedId) {
+      return res.status(400).json({ success: false, message: 'Please claim the ticket before uploading attachments' });
+    }
+
     // Customer cannot upload files to closed tickets
     const closedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Closed'");
     const closedId = closedStatusResult.rows[0]?.id;
@@ -64,14 +68,23 @@ const uploadAttachment = async (req, res) => {
 
     const detectedMime = validation.mimeType;
 
+    // Determine evidence stage
+    let stage = 'GENERAL';
+    if (user.role !== 'CUSTOMER' && req.body && req.body.evidence_stage) {
+      const inputStage = String(req.body.evidence_stage).toUpperCase().trim();
+      if (['BEFORE', 'DURING', 'AFTER', 'GENERAL'].includes(inputStage)) {
+        stage = inputStage;
+      }
+    }
+
     // Save file via storage driver
     const filePath = await storage.saveFile(req.file, detectedMime);
 
     // Save metadata in database
     const insertQuery = `
-      INSERT INTO complaint_attachments (complaint_id, file_name, file_path, file_size, mime_type, uploaded_by_id)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, file_name, file_size, mime_type, created_at
+      INSERT INTO complaint_attachments (complaint_id, file_name, file_path, file_size, mime_type, uploaded_by_id, evidence_stage)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, file_name, file_size, mime_type, evidence_stage, created_at
     `;
     const result = await dbPool.query(insertQuery, [
       id,
@@ -79,17 +92,25 @@ const uploadAttachment = async (req, res) => {
       filePath,
       req.file.size,
       detectedMime,
-      user.id
+      user.id,
+      stage
     ]);
 
     // Log comment notifying the upload
+    const commentRemark = stage !== 'GENERAL' 
+      ? `Attached ${stage} evidence photo: ${req.file.originalname}`
+      : `Attached file: ${req.file.originalname}`;
+
     await dbPool.query(`
       INSERT INTO complaint_comments (complaint_id, user_id, comment_text, is_internal)
       VALUES ($1, $2, $3, false)
-    `, [id, user.id, `Attached file: ${req.file.originalname}`]);
+    `, [id, user.id, commentRemark]);
 
     const logger = require('../utils/logger');
-    logger.audit('ATTACHMENT_UPLOADED', { complaintId: id, fileName: req.file.originalname }, user, req.ip);
+    logger.audit('ATTACHMENT_UPLOADED', { complaintId: id, fileName: req.file.originalname, evidenceStage: stage }, user, req.ip);
+    if (stage !== 'GENERAL') {
+      logger.audit('EVIDENCE_UPLOADED', { complaintId: id, fileName: req.file.originalname, evidenceStage: stage, mimeType: detectedMime }, user, req.ip);
+    }
 
     return res.status(201).json({
       success: true,
@@ -127,9 +148,16 @@ const getAttachments = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to view attachments for this complaint' });
     }
 
+    // Hide attachments before ticket claim for engineers
+    const assignedStatusResult = await dbPool.query("SELECT id FROM complaint_statuses WHERE name = 'Assigned'");
+    const assignedId = assignedStatusResult.rows[0]?.id;
+    if ((user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.status_id === assignedId) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
     // Fetch attachments
     const query = `
-      SELECT a.id, a.file_name, a.file_size, a.mime_type, a.created_at,
+      SELECT a.id, a.file_name, a.file_size, a.mime_type, a.evidence_stage, a.created_at,
              u.first_name, u.last_name, r.name AS role
       FROM complaint_attachments a
       LEFT JOIN users u ON a.uploaded_by_id = u.id
@@ -264,6 +292,13 @@ const deleteAttachment = async (req, res) => {
     const isAdmin = user.role === 'ADMIN';
     const isOwner = attachment.uploaded_by_id === user.id;
 
+    // Evidence photo deletion protection (Customers cannot delete engineer evidence)
+    if (attachment.evidence_stage && attachment.evidence_stage !== 'GENERAL') {
+      if (user.role === 'CUSTOMER') {
+        return res.status(403).json({ success: false, message: 'Forbidden: Customers cannot delete service evidence photos' });
+      }
+    }
+
     if (!isAdmin) {
       if (!isOwner) {
         return res.status(403).json({ success: false, message: 'Forbidden: You can only delete attachments that you uploaded' });
@@ -313,24 +348,47 @@ const deleteAttachment = async (req, res) => {
 };
 
 /**
- * Public route to simulate S3 download via pre-signed URL navigation
+ * Route to serve local storage attachment download via HMAC time-limited signed URL
  * GET /api/attachments/mock-download/:filename
  */
 const mockDownloadAttachment = async (req, res) => {
   const { filename } = req.params;
-  const { fileName } = req.query; // Display name
+  const { fileName, expires, token } = req.query;
 
   try {
     const fs = require('fs');
     const path = require('path');
-    const fullPath = path.join(__dirname, '..', 'uploads', filename);
+
+    // 1. Path traversal & character safety check
+    if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ success: false, message: 'Invalid filename parameter' });
+    }
+
+    const safeFilename = path.basename(filename);
+    if (safeFilename !== filename) {
+      return res.status(400).json({ success: false, message: 'Invalid filename parameter' });
+    }
+
+    // 2. HMAC token signature and expiration verification
+    const isValid = storage.verifyLocalDownloadToken(safeFilename, expires, token);
+    if (!isValid) {
+      const logger = require('../utils/logger');
+      logger.audit('SECURITY_VIOLATION', {
+        action: 'LOCAL_STORAGE_DOWNLOAD_REJECTED',
+        filename: safeFilename,
+        reason: 'Missing, expired, or invalid HMAC signature token'
+      }, null, req.ip);
+      return res.status(403).json({ success: false, message: 'Forbidden: Invalid or expired download token' });
+    }
+
+    const fullPath = path.join(__dirname, '..', 'uploads', safeFilename);
 
     if (!fs.existsSync(fullPath)) {
-      return res.status(404).send('Mock S3 file not found');
+      return res.status(404).json({ success: false, message: 'File not found on storage backend' });
     }
 
     // Determine content type based on extension
-    const ext = filename.split('.').pop().toLowerCase();
+    const ext = safeFilename.split('.').pop().toLowerCase();
     const mimeMap = {
       pdf: 'application/pdf',
       png: 'image/png',
@@ -345,11 +403,13 @@ const mockDownloadAttachment = async (req, res) => {
     };
 
     res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName || filename}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName || safeFilename}"`);
     fs.createReadStream(fullPath).pipe(res);
   } catch (error) {
-    console.error('Mock download error:', error.message);
-    res.status(500).send('Failed to stream mock S3 file');
+    console.error('Local download error:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: 'Failed to stream file from local storage' });
+    }
   }
 };
 

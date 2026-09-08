@@ -35,6 +35,8 @@ const Complaints = () => {
   const [formDesc, setFormDesc] = useState('');
   const [formCat, setFormCat] = useState('');
   const [formPri, setFormPri] = useState('');
+  const [formLocation, setFormLocation] = useState('');
+  const [serviceLocations, setServiceLocations] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [formSubmitting, setFormSubmitting] = useState(false);
@@ -47,14 +49,17 @@ const Complaints = () => {
       const catRes = await authFetch('/categories');
       const priRes = await authFetch('/priorities');
       const statusRes = await authFetch('/statuses');
+      const locRes = await authFetch('/my-service-locations');
 
       const categoriesResult = await catRes.json();
       const prioritiesResult = await priRes.json();
       const statusesResult = await statusRes.json();
+      const locsResult = await locRes.json();
 
       if (categoriesResult.success) setCategories(categoriesResult.data);
       if (prioritiesResult.success) setPriorities(prioritiesResult.data);
       if (statusesResult.success) setStatuses(statusesResult.data);
+      if (locsResult.success) setServiceLocations(locsResult.data);
 
       await fetchComplaints();
     } catch (err) {
@@ -188,8 +193,8 @@ const Complaints = () => {
     setFormError('');
     setFormSubmitting(true);
 
-    if (!formTitle || !formDesc || !formCat || !formPri) {
-      setFormError('All fields are required.');
+    if (!formTitle.trim() || !formDesc.trim() || !formPri) {
+      setFormError('Title, description, and priority are required.');
       setFormSubmitting(false);
       return;
     }
@@ -198,10 +203,11 @@ const Complaints = () => {
       const res = await authFetch('/complaints', {
         method: 'POST',
         body: JSON.stringify({
-          title: formTitle,
-          description: formDesc,
-          category_id: parseInt(formCat),
-          priority_id: parseInt(formPri)
+          title: formTitle.trim(),
+          description: formDesc.trim(),
+          category_id: formCat ? parseInt(formCat, 10) : null,
+          priority_id: parseInt(formPri, 10),
+          service_location_id: formLocation ? parseInt(formLocation, 10) : null
         })
       });
       const result = await res.json();
@@ -212,6 +218,7 @@ const Complaints = () => {
         setFormDesc('');
         setFormCat('');
         setFormPri('');
+        setFormLocation('');
         setShowModal(false);
         // Refresh list
         fetchComplaints();
@@ -231,69 +238,103 @@ const Complaints = () => {
 
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-        <h1>Complaint Tickets Ledger</h1>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+      {/* Page Header */}
+      <div className="page-header">
+        <div className="page-title-group">
+          <h1>
+            {user?.role === 'CUSTOMER' ? 'My Support Complaints' : 'Complaint Tickets Ledger'}
+          </h1>
+          <p>
+            {user?.role === 'CUSTOMER' ? 'Track and manage your submitted service requests' : 'Central operations ledger for tracking and resolving client service requests'}
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           {user && user.role === 'ADMIN' && (
             <button className="btn btn-secondary" onClick={handleExportCSV}>
+              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+              </svg>
               Export CSV
             </button>
           )}
           <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/>
+            </svg>
             File New Complaint
           </button>
         </div>
       </div>
 
-      {error && <div className="alert alert-danger">{error}</div>}
+      {error && (
+        <div className="alert alert-danger">
+          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          <div>{error}</div>
+        </div>
+      )}
 
       {/* Queue selector tabs for ENGINEER */}
       {user && (user.role === 'ENGINEER' || user.role === 'AGENT') && (
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
           <button
             className={`btn ${activeQueue === 'my' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ padding: '0.4rem 1.2rem', fontSize: '0.875rem' }}
+            style={{ padding: '0.45rem 1.25rem', fontSize: '0.85rem' }}
             onClick={() => setActiveQueue('my')}
           >
-            My Assigned Tickets
+            My Active Tickets
           </button>
           <button
-            className={`btn ${activeQueue === 'unassigned' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ padding: '0.4rem 1.2rem', fontSize: '0.875rem' }}
-            onClick={() => setActiveQueue('unassigned')}
+            className={`btn ${activeQueue === 'claim_required' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ padding: '0.45rem 1.25rem', fontSize: '0.85rem' }}
+            onClick={() => setActiveQueue('claim_required')}
           >
-            Unassigned Tickets
+            Claim Required
           </button>
         </div>
       )}
 
       {/* Filters Bar */}
-      <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
+      <div className="card" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           {/* Search Box */}
           <form onSubmit={handleSearchSubmit} style={{ display: 'flex', alignItems: 'flex-end', gap: '0.5rem', flexGrow: '1', minWidth: '280px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flexGrow: '1' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Search Keywords</span>
-              <input
-                type="text"
-                className="form-input"
-                style={{ padding: '0.4rem 0.8rem' }}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search ticket title or description..."
-              />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', flexGrow: '1' }}>
+              <span className="form-label" style={{ margin: 0 }}>Search Keywords</span>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ paddingLeft: '2.2rem' }}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search title, ticket #, or description..."
+                />
+                <svg
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                  style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-light)' }}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+              </div>
             </div>
-            <button type="submit" className="btn btn-secondary" style={{ padding: '0.45rem 1rem' }}>
+            <button type="submit" className="btn btn-secondary" style={{ padding: '0.6rem 1rem' }}>
               Search
             </button>
           </form>
 
-          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Status State</span>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '150px' }}>
+              <span className="form-label" style={{ margin: 0 }}>Status</span>
               <select
-                className="form-input"
-                style={{ padding: '0.4rem 0.8rem' }}
+                className="form-select"
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
               >
@@ -302,11 +343,10 @@ const Complaints = () => {
               </select>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Priority Severity</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '140px' }}>
+              <span className="form-label" style={{ margin: 0 }}>Priority</span>
               <select
-                className="form-input"
-                style={{ padding: '0.4rem 0.8rem' }}
+                className="form-select"
                 value={filterPriority}
                 onChange={(e) => setFilterPriority(e.target.value)}
               >
@@ -315,11 +355,10 @@ const Complaints = () => {
               </select>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Category Group</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '150px' }}>
+              <span className="form-label" style={{ margin: 0 }}>Category</span>
               <select
-                className="form-input"
-                style={{ padding: '0.4rem 0.8rem' }}
+                className="form-select"
                 value={filterCategory}
                 onChange={(e) => setFilterCategory(e.target.value)}
               >
@@ -328,54 +367,56 @@ const Complaints = () => {
               </select>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>SLA Escalation</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '140px' }}>
+              <span className="form-label" style={{ margin: 0 }}>SLA Status</span>
               <select
-                className="form-input"
-                style={{ padding: '0.4rem 0.8rem' }}
+                className="form-select"
                 value={filterOverdue}
                 onChange={(e) => setFilterOverdue(e.target.value)}
               >
-                <option value="">All Tickets</option>
+                <option value="">All Deadlines</option>
                 <option value="true">Overdue / Breached</option>
               </select>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', minWidth: '160px' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>Escalation State</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '140px' }}>
+              <span className="form-label" style={{ margin: 0 }}>Escalation</span>
               <select
-                className="form-input"
-                style={{ padding: '0.4rem 0.8rem' }}
+                className="form-select"
                 value={filterEscalated}
                 onChange={(e) => setFilterEscalated(e.target.value)}
               >
-                <option value="">All Tickets</option>
-                <option value="true">Escalated</option>
-                <option value="false">Non-Escalated</option>
+                <option value="">All Escalations</option>
+                <option value="true">Escalated Only</option>
+                <option value="false">Standard</option>
               </select>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Complaints Table */}
-      <div className="card" style={{ padding: '0' }}>
+      {/* Complaints Table Container */}
+      <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
         {complaints.length === 0 ? (
-          <p style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>No complaints found matching the criteria.</p>
+          <div style={{ padding: '3rem 2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📋</div>
+            <p style={{ fontWeight: '600', color: 'var(--text-main)' }}>No complaints found</p>
+            <p style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>Try adjusting your search keywords or filter criteria.</p>
+          </div>
         ) : (
-          <div className="table-container">
+          <div className="table-container" style={{ border: 'none', borderRadius: '0' }}>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Ticket</th>
-                  <th>Title</th>
+                  <th>Ticket #</th>
+                  <th>Subject Title</th>
                   <th>Creator</th>
                   <th>Category</th>
                   <th>Priority</th>
                   <th>Status</th>
-                  <th>SLA Status</th>
+                  <th>SLA Deadline</th>
                   <th>Date Filed</th>
-                  {((activeQueue === 'unassigned' && user && (user.role === 'ENGINEER' || user.role === 'AGENT')) || (user && user.role === 'CUSTOMER')) && <th>Action</th>}
+                  {((activeQueue === 'unassigned' && user && (user.role === 'ENGINEER' || user.role === 'AGENT')) || (user && user.role === 'CUSTOMER')) && <th style={{ textAlign: 'right' }}>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -387,34 +428,52 @@ const Complaints = () => {
                   return (
                     <tr key={ticket.id}>
                       <td>
-                        <Link to={`/complaints/${ticket.id}`} style={{ color: 'var(--primary-light)', fontWeight: 'bold', textDecoration: 'none' }}>
+                        <Link
+                          to={`/complaints/${ticket.id}`}
+                          style={{
+                            fontFamily: 'JetBrains Mono, monospace',
+                            fontWeight: '700',
+                            color: 'var(--primary-color)',
+                            textDecoration: 'none',
+                            backgroundColor: 'var(--bg-subtle)',
+                            padding: '0.2rem 0.45rem',
+                            borderRadius: '4px',
+                            border: '1px solid var(--border-color)',
+                            fontSize: '0.82rem'
+                          }}
+                        >
                           {ticket.ticket_number}
                         </Link>
                       </td>
                       <td>
-                        <strong>{ticket.title}</strong>
-                        {ticket.is_escalated && (
-                          <span
-                            className="badge badge-danger"
-                            style={{
-                              marginLeft: '0.5rem',
-                              fontSize: '0.65rem',
-                              background: '#ef4444',
-                              color: '#fff',
-                              padding: '0.15rem 0.35rem',
-                              borderRadius: '4px',
-                              fontWeight: 'bold',
-                              display: 'inline-flex',
-                              alignItems: 'center'
-                            }}
-                            title={`Escalation Level: ${ticket.escalation_level}`}
-                          >
-                            🚨 Escalated (Lv.{ticket.escalation_level})
-                          </span>
-                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <Link to={`/complaints/${ticket.id}`} style={{ fontWeight: '600', color: 'var(--text-main)', textDecoration: 'none' }}>
+                            {ticket.title}
+                          </Link>
+                          {ticket.is_escalated && (
+                            <span
+                              className="badge badge-critical"
+                              style={{
+                                fontSize: '0.65rem',
+                                padding: '0.1rem 0.35rem'
+                              }}
+                              title={`Escalation Tier: ${ticket.escalation_level}`}
+                            >
+                              🚨 Tier {ticket.escalation_level}
+                            </span>
+                          )}
+                        </div>
                       </td>
-                      <td>{ticket.creator_first_name} {ticket.creator_last_name}</td>
-                      <td>{ticket.category}</td>
+                      <td>
+                        <span style={{ fontWeight: '500' }}>
+                          {ticket.creator_first_name} {ticket.creator_last_name}
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{ fontSize: '0.85rem', color: ticket.category ? 'var(--text-color)' : 'var(--text-muted)' }}>
+                          {ticket.category || '—'}
+                        </span>
+                      </td>
                       <td>
                         <span className={`badge badge-${priorityKey}`}>{ticket.priority}</span>
                       </td>
@@ -424,41 +483,43 @@ const Complaints = () => {
                       <td>
                         {ticket.due_date ? (
                           ticket.status === 'Resolved' || ticket.status === 'Closed' ? (
-                            <span style={{ color: 'var(--success-color)', fontSize: '0.85rem', fontWeight: '500' }}>Satisfied</span>
+                            <span style={{ color: 'var(--success)', fontSize: '0.82rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                              ✓ Satisfied
+                            </span>
                           ) : new Date(ticket.due_date) < new Date() ? (
-                            <span className="badge badge-danger" style={{ fontSize: '0.75rem' }}>OVERDUE</span>
+                            <span className="badge badge-critical" style={{ fontSize: '0.72rem' }}>OVERDUE</span>
                           ) : (
-                            <span className="badge badge-warning" style={{ fontSize: '0.75rem' }}>
-                              {Math.ceil((new Date(ticket.due_date) - new Date()) / (1000 * 60 * 60))}h left
+                            <span className="badge badge-pending" style={{ fontSize: '0.72rem' }}>
+                              ⏱ {Math.ceil((new Date(ticket.due_date) - new Date()) / (1000 * 60 * 60))}h left
                             </span>
                           )
                         ) : (
-                          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>None</span>
+                          <span style={{ color: 'var(--text-light)', fontSize: '0.82rem' }}>—</span>
                         )}
                       </td>
-                      <td>{dateStr}</td>
+                      <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{dateStr}</td>
                       {user && user.role === 'CUSTOMER' && (
-                        <td>
+                        <td style={{ textAlign: 'right' }}>
                           {ticket.status === 'Pending' && (
                             <button
-                              className="btn btn-danger"
-                              style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
+                              className="btn btn-sm btn-danger"
                               onClick={() => setShowDeleteModal(ticket.id)}
                             >
-                              Delete
+                              Cancel
                             </button>
                           )}
                         </td>
                       )}
-                      {activeQueue === 'unassigned' && user && (user.role === 'ENGINEER' || user.role === 'AGENT') && (
-                        <td>
-                          <button
-                            className="btn btn-secondary"
-                            style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
-                            onClick={() => handleClaimTicket(ticket.id)}
-                          >
-                            Claim
-                          </button>
+                      {user && (user.role === 'ENGINEER' || user.role === 'AGENT') && (
+                        <td style={{ textAlign: 'right' }}>
+                          {ticket.status === 'Assigned' && (
+                            <button
+                              className="btn btn-sm btn-primary"
+                              onClick={() => handleClaimTicket(ticket.id)}
+                            >
+                              Accept Assignment
+                            </button>
+                          )}
                         </td>
                       )}
                     </tr>
@@ -470,22 +531,20 @@ const Complaints = () => {
         )}
 
         {/* Pagination controls */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', borderTop: '1px solid var(--border-color)', marginTop: '0' }}>
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            Showing {complaints.length > 0 ? offset + 1 : 0} - {Math.min(offset + complaints.length, total)} of {total} tickets
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.85rem 1.25rem', borderTop: '1px solid var(--border-color)', background: 'var(--bg-subtle)' }}>
+          <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)', fontWeight: '500' }}>
+            Showing {complaints.length > 0 ? offset + 1 : 0} &ndash; {Math.min(offset + complaints.length, total)} of {total} tickets
           </span>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button
-              className="btn btn-secondary"
-              style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem' }}
+              className="btn btn-sm btn-secondary"
               disabled={offset === 0}
               onClick={() => handlePageChange('prev')}
             >
               &larr; Previous
             </button>
             <button
-              className="btn btn-secondary"
-              style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem' }}
+              className="btn btn-sm btn-secondary"
               disabled={offset + limit >= total}
               onClick={() => handlePageChange('next')}
             >
@@ -495,31 +554,35 @@ const Complaints = () => {
         </div>
       </div>
 
-      {/* File New Complaint Modal Overlay */}
+      {/* File New Complaint Modal */}
       {showModal && (
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header">
               <h2>File a New Complaint</h2>
               <button
-                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--text-muted)' }}
                 onClick={() => setShowModal(false)}
               >
                 &times;
               </button>
             </div>
 
-            {formError && <div className="alert alert-danger">{formError}</div>}
+            {formError && (
+              <div className="alert alert-danger" style={{ marginBottom: '1.25rem' }}>
+                <div>{formError}</div>
+              </div>
+            )}
 
             <form onSubmit={handleCreateComplaint}>
               <div className="form-group">
-                <label className="form-label">Subject Title</label>
+                <label className="form-label">Subject / Issue Title</label>
                 <input
                   type="text"
                   className="form-input"
                   value={formTitle}
                   onChange={(e) => setFormTitle(e.target.value)}
-                  placeholder="Summarize the complaint issue"
+                  placeholder="Summarize the core problem (e.g. Network downtime in East wing)"
                   required
                 />
               </div>
@@ -527,23 +590,40 @@ const Complaints = () => {
               <div className="form-group">
                 <label className="form-label">Detailed Description</label>
                 <textarea
-                  className="form-input"
+                  className="form-textarea"
                   style={{ minHeight: '120px', resize: 'vertical' }}
                   value={formDesc}
                   onChange={(e) => setFormDesc(e.target.value)}
-                  placeholder="Describe the complaint with detail..."
+                  placeholder="Please provide full details of the issue, affected devices, and impact..."
                   required
                 />
               </div>
 
+              {serviceLocations && serviceLocations.length > 0 && (
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label className="form-label">Service Location (Optional)</label>
+                  <select
+                    className="form-select"
+                    value={formLocation}
+                    onChange={(e) => setFormLocation(e.target.value)}
+                  >
+                    <option value="">Default Account Address / Select Service Location</option>
+                    {serviceLocations.map(loc => (
+                      <option key={loc.id} value={loc.id}>
+                        {loc.location_name} — {loc.address}, {loc.city} ({loc.location_code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
                 <div className="form-group" style={{ margin: '0' }}>
-                  <label className="form-label">Category Group</label>
+                  <label className="form-label">Category (Optional)</label>
                   <select
-                    className="form-input"
+                    className="form-select"
                     value={formCat}
                     onChange={(e) => setFormCat(e.target.value)}
-                    required
                   >
                     <option value="">Select Category</option>
                     {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -553,7 +633,7 @@ const Complaints = () => {
                 <div className="form-group" style={{ margin: '0' }}>
                   <label className="form-label">Priority Severity</label>
                   <select
-                    className="form-input"
+                    className="form-select"
                     value={formPri}
                     onChange={(e) => setFormPri(e.target.value)}
                     required
@@ -569,7 +649,7 @@ const Complaints = () => {
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={formSubmitting}>
-                  {formSubmitting ? 'Submitting...' : 'Submit Complaint'}
+                  {formSubmitting ? 'Submitting Ticket...' : 'Submit Complaint'}
                 </button>
               </div>
             </form>
@@ -577,25 +657,25 @@ const Complaints = () => {
         </div>
       )}
 
-      {/* Customer Delete Confirmation Modal */}
+      {/* Customer Cancel Modal */}
       {showDeleteModal && (
         <div className="modal-overlay">
-          <div className="modal-card" style={{ maxWidth: '450px' }}>
+          <div className="modal-card" style={{ maxWidth: '440px' }}>
             <div className="modal-header">
-              <h2>Delete Complaint</h2>
+              <h2>Cancel Complaint</h2>
               <button
-                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--text-muted)' }}
                 onClick={() => setShowDeleteModal(null)}
               >
                 &times;
               </button>
             </div>
-            <div style={{ padding: '1rem 0' }}>
-              <p style={{ color: 'var(--text-color)', marginBottom: '0.75rem' }}>
-                Are you sure you want to delete this complaint?
+            <div style={{ padding: '0.5rem 0 1.25rem' }}>
+              <p style={{ color: 'var(--text-color)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                Are you sure you want to cancel this pending complaint?
               </p>
-              <p style={{ color: 'var(--danger-color, #ef4444)', fontSize: '0.85rem', fontWeight: 'bold' }}>
-                This action cannot be undone.
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                The complaint will be marked as Cancelled and preserved in your complaint history.
               </p>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
@@ -605,7 +685,7 @@ const Complaints = () => {
                 onClick={() => setShowDeleteModal(null)}
                 disabled={deletingComplaint}
               >
-                Cancel
+                Keep Complaint
               </button>
               <button
                 type="button"
@@ -613,7 +693,7 @@ const Complaints = () => {
                 onClick={() => handleDeleteComplaint(showDeleteModal)}
                 disabled={deletingComplaint}
               >
-                {deletingComplaint ? 'Deleting...' : 'Delete Complaint'}
+                {deletingComplaint ? 'Cancelling...' : 'Cancel Complaint'}
               </button>
             </div>
           </div>

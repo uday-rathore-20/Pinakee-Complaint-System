@@ -358,43 +358,54 @@ const Settings = () => {
 
   return (
     <div className="page-container">
-      <div style={{ marginBottom: '1.5rem' }}>
-        <h1>System Settings & Configurations</h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.2rem' }}>
-          Configure departments list, active complaint categories, and dynamically update priority SLA targets.
-        </p>
+      {/* Page Header */}
+      <div className="page-header">
+        <div className="page-title-group">
+          <h1>System Settings & Configurations</h1>
+          <p>
+            Configure complaint categories, SLA priority target durations, ticket routing engine, log archiving, and outbox logs.
+          </p>
+        </div>
       </div>
 
-      {successMessage && <div className="alert alert-success" style={{ marginBottom: '1.5rem' }}>{successMessage}</div>}
-      {actionError && <div className="alert alert-danger" style={{ marginBottom: '1.5rem' }}>{actionError}</div>}
+      {successMessage && (
+        <div className="alert alert-success" style={{ marginBottom: '1.5rem' }}>
+          <div>{successMessage}</div>
+        </div>
+      )}
+      {actionError && (
+        <div className="alert alert-danger" style={{ marginBottom: '1.5rem' }}>
+          <div>{actionError}</div>
+        </div>
+      )}
 
       {/* Tabs Menu */}
-      <div style={{ display: 'flex', borderBottom: '2px solid var(--border-color)', marginBottom: '1.5rem', gap: '1rem' }}>
+      <div style={{ display: 'flex', borderBottom: '2px solid var(--border-color)', marginBottom: '1.75rem', gap: '0.75rem', flexWrap: 'wrap' }}>
         <button
           onClick={() => setActiveTab('departments')}
           style={{
             background: 'none',
             border: 'none',
-            padding: '0.75rem 1rem',
+            padding: '0.65rem 1rem',
             cursor: 'pointer',
-            fontSize: '0.95rem',
-            fontWeight: 'bold',
+            fontSize: '0.9rem',
+            fontWeight: '600',
             color: activeTab === 'departments' ? 'var(--primary-color)' : 'var(--text-muted)',
             borderBottom: activeTab === 'departments' ? '3px solid var(--primary-color)' : '3px solid transparent',
             marginBottom: '-2px'
           }}
         >
-          Departments Management
+          Departments
         </button>
         <button
           onClick={() => setActiveTab('categories')}
           style={{
             background: 'none',
             border: 'none',
-            padding: '0.75rem 1rem',
+            padding: '0.65rem 1rem',
             cursor: 'pointer',
-            fontSize: '0.95rem',
-            fontWeight: 'bold',
+            fontSize: '0.9rem',
+            fontWeight: '600',
             color: activeTab === 'categories' ? 'var(--primary-color)' : 'var(--text-muted)',
             borderBottom: activeTab === 'categories' ? '3px solid var(--primary-color)' : '3px solid transparent',
             marginBottom: '-2px'
@@ -407,10 +418,10 @@ const Settings = () => {
           style={{
             background: 'none',
             border: 'none',
-            padding: '0.75rem 1rem',
+            padding: '0.65rem 1rem',
             cursor: 'pointer',
-            fontSize: '0.95rem',
-            fontWeight: 'bold',
+            fontSize: '0.9rem',
+            fontWeight: '600',
             color: activeTab === 'priorities' ? 'var(--primary-color)' : 'var(--text-muted)',
             borderBottom: activeTab === 'priorities' ? '3px solid var(--primary-color)' : '3px solid transparent',
             marginBottom: '-2px'
@@ -423,10 +434,10 @@ const Settings = () => {
           style={{
             background: 'none',
             border: 'none',
-            padding: '0.75rem 1rem',
+            padding: '0.65rem 1rem',
             cursor: 'pointer',
-            fontSize: '0.95rem',
-            fontWeight: 'bold',
+            fontSize: '0.9rem',
+            fontWeight: '600',
             color: activeTab === 'routing' ? 'var(--primary-color)' : 'var(--text-muted)',
             borderBottom: activeTab === 'routing' ? '3px solid var(--primary-color)' : '3px solid transparent',
             marginBottom: '-2px'
@@ -439,10 +450,10 @@ const Settings = () => {
           style={{
             background: 'none',
             border: 'none',
-            padding: '0.75rem 1rem',
+            padding: '0.65rem 1rem',
             cursor: 'pointer',
-            fontSize: '0.95rem',
-            fontWeight: 'bold',
+            fontSize: '0.9rem',
+            fontWeight: '600',
             color: activeTab === 'archives' ? 'var(--primary-color)' : 'var(--text-muted)',
             borderBottom: activeTab === 'archives' ? '3px solid var(--primary-color)' : '3px solid transparent',
             marginBottom: '-2px'
@@ -455,10 +466,10 @@ const Settings = () => {
           style={{
             background: 'none',
             border: 'none',
-            padding: '0.75rem 1rem',
+            padding: '0.65rem 1rem',
             cursor: 'pointer',
-            fontSize: '0.95rem',
-            fontWeight: 'bold',
+            fontSize: '0.9rem',
+            fontWeight: '600',
             color: activeTab === 'outbox' ? 'var(--primary-color)' : 'var(--text-muted)',
             borderBottom: activeTab === 'outbox' ? '3px solid var(--primary-color)' : '3px solid transparent',
             marginBottom: '-2px'

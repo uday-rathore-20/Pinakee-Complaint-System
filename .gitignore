@@ -45,3 +45,6 @@ backend/scratch/
 
 # Runtime archives
 backend/archives/
+
+# Local file uploads
+backend/uploads/

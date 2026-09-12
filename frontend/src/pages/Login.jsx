@@ -2,7 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+const rawBase = (import.meta.env.VITE_API_BASE_URL || '/api')
+  .trim()
+  .replace(/\/+$/, '');
+
+const API_BASE = rawBase.endsWith('/api')
+  ? rawBase
+  : `${rawBase}/api`;
 
 const Login = () => {
   const [view, setView] = useState('login'); // 'login', 'forgot', 'reset'

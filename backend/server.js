@@ -127,23 +127,15 @@ if (process.env.NODE_ENV === 'test') {
   });
 }
 
-// Root route (friendly greeting) - Dev only
-if (process.env.NODE_ENV !== 'production') {
-  app.get('/', (req, res) => {
-    res.json({
-      message: 'Welcome to the PINakee Complaint Management System API',
-      endpoints: {
-        healthCheck: '/api/health',
-        auth: '/api/auth',
-        users: '/api/users',
-        lookups: '/api/{categories|departments|statuses|priorities}',
-        complaints: '/api/complaints',
-        dashboard: '/api/dashboard/{stats|activity}',
-        attachments: '/api/{complaints/:id/attachments|attachments/:id}'
-      }
-    });
+// Root route (API discovery and service status)
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'PINakee Complaint Management System API',
+    healthCheck: '/api/health',
+    version: '1.0.0'
   });
-}
+});
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
@@ -170,24 +162,14 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
-// Serve static assets in production mode
-if (process.env.NODE_ENV === 'production') {
-  const path = require('path');
-  const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
-  app.use(express.static(frontendDistPath));
-
-  // SPA routing fallback: route non-API requests to index.html
-  app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api/')) {
-      return next();
-    }
-    res.sendFile(path.join(frontendDistPath, 'index.html'));
-  });
-}
-
 // Fallback for unmapped API endpoints (returns structured JSON 404)
 app.all('/api/*', (req, res) => {
   res.status(404).json({ success: false, message: 'API endpoint not found' });
+});
+
+// Fallback for non-API unmapped routes (returns structured JSON 404)
+app.all('*', (req, res) => {
+  res.status(404).json({ success: false, message: 'Resource not found' });
 });
 
 // Centralized Error Handling Middleware (hides stack traces in production)

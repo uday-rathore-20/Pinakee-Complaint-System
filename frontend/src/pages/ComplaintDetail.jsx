@@ -92,6 +92,10 @@ const ComplaintDetail = () => {
   const [reopenReasonInput, setReopenReasonInput] = useState('');
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelReasonInput, setCancelReasonInput] = useState('');
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmRating, setConfirmRating] = useState(5);
+  const [confirmFeedback, setConfirmFeedback] = useState('');
+  const [submittingConfirm, setSubmittingConfirm] = useState(false);
   const [submittingWorkflowAction, setSubmittingWorkflowAction] = useState(false);
 
   const [fcr, setFcr] = useState(null);
@@ -940,6 +944,39 @@ const ComplaintDetail = () => {
     }
   };
 
+  const handleConfirmResolution = async (e) => {
+    if (e) e.preventDefault();
+    const ratingInt = parseInt(confirmRating, 10);
+    if (isNaN(ratingInt) || ratingInt < 1 || ratingInt > 5) {
+      setActionError('Please provide a valid rating between 1 and 5 stars.');
+      return;
+    }
+    setActionError('');
+    setSubmittingConfirm(true);
+    try {
+      const res = await authFetch(`/complaints/${id}/fcr/confirm`, {
+        method: 'POST',
+        body: JSON.stringify({
+          customer_rating: ratingInt,
+          customer_feedback: confirmFeedback.trim()
+        })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        setShowConfirmModal(false);
+        setConfirmFeedback('');
+        setConfirmRating(5);
+        await fetchComplaintDetails();
+      } else {
+        setActionError(result.message || 'Failed to confirm resolution.');
+      }
+    } catch (err) {
+      setActionError(err.message || 'Network error confirming resolution.');
+    } finally {
+      setSubmittingConfirm(false);
+    }
+  };
+
   const handleCancelComplaint = async (e) => {
     if (e) e.preventDefault();
     setActionError('');
@@ -1195,6 +1232,58 @@ const ComplaintDetail = () => {
                 </div>
               );
             })()}
+
+            {/* Customer Resolution Action Controls */}
+            {user.role === 'CUSTOMER' && complaint.created_by_id === user.id && (
+              <div
+                style={{
+                  marginTop: '1rem',
+                  paddingTop: '0.9rem',
+                  borderTop: '1px solid #bbf7d0'
+                }}
+              >
+                <div style={{ fontWeight: '600', fontSize: '0.9rem', color: '#14532d', marginBottom: '0.35rem' }}>
+                  Customer Action Required
+                </div>
+                <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.85rem', color: '#166534' }}>
+                  Please review the completed service and choose an action to confirm resolution or reopen if the issue persists.
+                </p>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setShowConfirmModal(true)}
+                    disabled={submittingConfirm || submittingWorkflowAction}
+                    style={{
+                      background: '#16a34a',
+                      borderColor: '#16a34a',
+                      color: '#ffffff',
+                      fontSize: '0.85rem',
+                      padding: '0.5rem 1rem',
+                      fontWeight: '600'
+                    }}
+                  >
+                    ✓ Confirm Resolution
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={() => setShowReopenModal(true)}
+                    disabled={submittingConfirm || submittingWorkflowAction}
+                    style={{
+                      background: '#dc2626',
+                      borderColor: '#dc2626',
+                      color: '#ffffff',
+                      fontSize: '0.85rem',
+                      padding: '0.5rem 1rem',
+                      fontWeight: '600'
+                    }}
+                  >
+                    ⚠ Reopen Complaint
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2131,11 +2220,13 @@ const ComplaintDetail = () => {
 
       {/* Reopen Complaint Modal */}
       {showReopenModal && (
-        <div className="modal-overlay">
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="reopen-modal-title">
           <div className="modal-card" style={{ maxWidth: '480px' }}>
             <div className="modal-header">
-              <h2>Reopen Complaint</h2>
+              <h2 id="reopen-modal-title">Reopen Complaint</h2>
               <button
+                type="button"
+                aria-label="Close dialog"
                 style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
                 onClick={() => { setShowReopenModal(false); setReopenReasonInput(''); }}
               >
@@ -2148,8 +2239,9 @@ const ComplaintDetail = () => {
                   Please specify why the service resolution was unsatisfactory or why the issue remains unresolved. This will route the ticket to Admin Review for reassignment.
                 </p>
                 <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">Mandatory Rejection / Reopen Reason *</label>
+                  <label htmlFor="reopen-reason-input" className="form-label">Mandatory Rejection / Reopen Reason *</label>
                   <textarea
+                    id="reopen-reason-input"
                     className="form-input"
                     rows="3"
                     value={reopenReasonInput}
@@ -2175,6 +2267,110 @@ const ComplaintDetail = () => {
                   style={{ backgroundColor: '#ef4444', borderColor: '#ef4444', color: '#fff' }}
                 >
                   {submittingWorkflowAction ? 'Reopening...' : 'Reopen Complaint'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Resolution Modal */}
+      {showConfirmModal && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-resolution-title">
+          <div className="modal-card" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <h2 id="confirm-resolution-title">Confirm Resolution</h2>
+              <button
+                type="button"
+                aria-label="Close dialog"
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-muted)' }}
+                onClick={() => { setShowConfirmModal(false); setConfirmFeedback(''); setConfirmRating(5); }}
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleConfirmResolution}>
+              <div style={{ padding: '1rem 0' }}>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+                  The service has been completed by the engineer. Confirming resolution verifies the service visit and closes this ticket.
+                </p>
+
+                {/* Rating Selection 1-5 Stars */}
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label id="confirm-rating-label" className="form-label" style={{ fontWeight: '600', marginBottom: '0.35rem' }}>
+                    Service Rating (1 to 5 Stars) *
+                  </label>
+                  <div
+                    role="radiogroup"
+                    aria-labelledby="confirm-rating-label"
+                    style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}
+                  >
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        role="radio"
+                        aria-checked={confirmRating === star}
+                        aria-label={`${star} star${star > 1 ? 's' : ''}`}
+                        onClick={() => setConfirmRating(star)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          padding: '0.2rem',
+                          fontSize: '1.75rem',
+                          lineHeight: 1,
+                          color: star <= confirmRating ? '#f59e0b' : '#cbd5e1',
+                          outline: 'none',
+                          transition: 'transform 0.1s ease'
+                        }}
+                      >
+                        ★
+                      </button>
+                    ))}
+                    <span style={{ fontSize: '0.9rem', fontWeight: '600', color: '#64748b', marginLeft: '0.5rem' }}>
+                      ({confirmRating} / 5)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Optional Feedback Comments */}
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label htmlFor="confirm-feedback-input" className="form-label" style={{ fontWeight: '600', marginBottom: '0.35rem' }}>
+                    Feedback Comments (Optional)
+                  </label>
+                  <textarea
+                    id="confirm-feedback-input"
+                    className="form-input"
+                    rows="3"
+                    value={confirmFeedback}
+                    onChange={(e) => setConfirmFeedback(e.target.value)}
+                    placeholder="Share feedback on the engineer's service visit..."
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => { setShowConfirmModal(false); setConfirmFeedback(''); setConfirmRating(5); }}
+                  disabled={submittingConfirm}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={submittingConfirm}
+                  style={{
+                    backgroundColor: '#16a34a',
+                    borderColor: '#16a34a',
+                    color: '#ffffff',
+                    fontWeight: '600'
+                  }}
+                >
+                  {submittingConfirm ? 'Confirming...' : '✓ Confirm & Close Ticket'}
                 </button>
               </div>
             </form>

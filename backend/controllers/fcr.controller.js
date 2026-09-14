@@ -187,13 +187,11 @@ const getFcr = async (req, res) => {
       ORDER BY csh.changed_at ASC
     `, [id]);
 
-    let reachedSiteTime = null;
     let workStartTime = null;
     let workCloseTime = null;
     let callCloseTime = null;
 
     historyRes.rows.forEach(h => {
-      if (h.new_status_name === 'Accepted' && !reachedSiteTime) reachedSiteTime = h.changed_at;
       if (h.new_status_name === 'In Progress' && !workStartTime) workStartTime = h.changed_at;
       if (h.new_status_name === 'Resolved' && !workCloseTime) workCloseTime = h.changed_at;
       if (h.new_status_name === 'Closed' && !callCloseTime) callCloseTime = h.changed_at;
@@ -250,7 +248,7 @@ const getFcr = async (req, res) => {
             visit_end_time: '10:00',
             call_start_time: complaint.created_at,
             travel_start_time: null,
-            reached_site_time: reachedSiteTime,
+            reached_site_time: null,
             work_start_time: workStartTime,
             work_close_time: workCloseTime,
             call_close_time: callCloseTime,
@@ -313,7 +311,7 @@ const getFcr = async (req, res) => {
       visit_end_time: fcrRow.visit_end_time,
       call_start_time: fcrRow.call_start_time || complaint.created_at,
       travel_start_time: fcrRow.travel_start_time || null,
-      reached_site_time: fcrRow.reached_site_time || reachedSiteTime,
+      reached_site_time: fcrRow.reached_site_time || null,
       work_start_time: fcrRow.work_start_time || workStartTime,
       work_close_time: fcrRow.work_close_time || workCloseTime,
       call_close_time: fcrRow.call_close_time || callCloseTime,

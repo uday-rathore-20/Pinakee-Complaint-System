@@ -1400,32 +1400,47 @@ const ComplaintDetail = () => {
           </div>
 
           {/* Digital FCR / Service Report */}
-          <ErrorBoundary
-            fallback={({ error: _error, reset }) => (
-              <div className="card" role="alert" style={{ padding: '2rem', textAlign: 'center' }}>
-                <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>⚠️</div>
-                <h4 style={{ margin: '0 0 0.5rem', color: 'var(--text-main)' }}>
-                  Service Report Unavailable
-                </h4>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: '0 0 1rem' }}>
-                  This section encountered an error and could not be displayed.
-                </p>
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={reset}
-                >
-                  Try Again
-                </button>
+          {['In Progress', 'On Hold', 'Resolved', 'Closed'].includes(complaint.status) ? (
+            <ErrorBoundary
+              fallback={({ error: _error, reset }) => (
+                <div className="card" role="alert" style={{ padding: '2rem', textAlign: 'center' }}>
+                  <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>⚠️</div>
+                  <h4 style={{ margin: '0 0 0.5rem', color: 'var(--text-main)' }}>
+                    Service Report Unavailable
+                  </h4>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: '0 0 1rem' }}>
+                    This section encountered an error and could not be displayed.
+                  </p>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={reset}
+                  >
+                    Try Again
+                  </button>
+                </div>
+              )}
+            >
+              <DigitalFcrReport
+                complaintId={id}
+                complaintStatus={complaint.status}
+                onRefresh={fetchComplaintDetails}
+                onDownloadPdf={handleDownloadPdf}
+              />
+            </ErrorBoundary>
+          ) : (
+            <div className="card" style={{ background: '#f8fafc', border: '1px dashed #cbd5e1', padding: '1.75rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '1.8rem', marginBottom: '0.5rem' }}>🔒</div>
+              <h4 style={{ margin: '0 0 0.4rem 0', color: '#334155', fontSize: '1rem', fontWeight: '600' }}>
+                Digital Field Call Report Locked
+              </h4>
+              <p style={{ margin: '0 0 0.5rem 0', color: '#64748b', fontSize: '0.85rem' }}>
+                The service report will unlock once the engineer starts work at the customer site.
+              </p>
+              <div style={{ fontSize: '0.8rem', color: '#475569' }}>
+                Current status: <strong>{complaint.status}</strong>
               </div>
-            )}
-          >
-            <DigitalFcrReport
-              complaintId={id}
-              complaintStatus={complaint.status}
-              onRefresh={fetchComplaintDetails}
-              onDownloadPdf={handleDownloadPdf}
-            />
-          </ErrorBoundary>
+            </div>
+          )}
 
           {/* Attachments Card */}
           <div className="card">

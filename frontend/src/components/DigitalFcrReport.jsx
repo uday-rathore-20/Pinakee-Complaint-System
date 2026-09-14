@@ -319,7 +319,9 @@ export default function DigitalFcrReport({
   const customer = reportData?.customer || {};
   const engineer = reportData?.engineer || {};
   const complaint = reportData?.complaint || {};
-  const isEngineer = (user.role === 'ENGINEER' || user.role === 'AGENT') && complaint.assigned_to_id === user.id;
+  const isEngineer =
+    (user.role === 'ENGINEER' || user.role === 'AGENT') &&
+    (complaint.assigned_to_id === user.id || engineer?.id === user.id);
   const isAdmin = user.role === 'ADMIN';
   const isCustomer = user.role === 'CUSTOMER';
   const isDraft = !fcr.status || fcr.status === 'Draft';

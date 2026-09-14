@@ -270,6 +270,7 @@ const getFcr = async (req, res) => {
             category: complaint.category_name,
             department: complaint.department_name,
             status: complaint.status_name,
+            assigned_to_id: complaint.assigned_to_id,
             created_at: complaint.created_at,
             due_date: complaint.due_date
           },
@@ -345,6 +346,7 @@ const getFcr = async (req, res) => {
           category: complaint.category_name,
           department: complaint.department_name,
           status: complaint.status_name,
+          assigned_to_id: complaint.assigned_to_id,
           created_at: complaint.created_at,
           due_date: complaint.due_date
         },
